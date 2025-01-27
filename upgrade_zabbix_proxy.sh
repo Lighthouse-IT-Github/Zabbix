@@ -6,7 +6,7 @@
 systemctl stop zabbix-proxy
 
 # Clean up old downloaded files
-rm zabbix-release_*.deb
+rm zabbix-release_*
 
 # Backup the current Zabbix proxy configuration
 cp /etc/zabbix/zabbix_proxy.conf /etc/zabbix/zabbix_proxy.conf.bak
@@ -30,7 +30,7 @@ cp /etc/zabbix/zabbix_proxy.conf.bak /etc/zabbix/zabbix_proxy.conf
 systemctl start zabbix-proxy
 
 # Clean up downloaded files
-rm zabbix-release_*.deb
+rm zabbix-release_*
 
 echo "Zabbix Proxy upgrade complete."
 
