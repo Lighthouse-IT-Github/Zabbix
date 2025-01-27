@@ -5,6 +5,9 @@
 # Stop the Zabbix proxy service
 systemctl stop zabbix-proxy
 
+# Clean up old downloaded files
+rm zabbix-release_*.deb
+
 # Backup the current Zabbix proxy configuration
 cp /etc/zabbix/zabbix_proxy.conf /etc/zabbix/zabbix_proxy.conf.bak
 
