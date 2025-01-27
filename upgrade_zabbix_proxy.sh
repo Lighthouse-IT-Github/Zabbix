@@ -14,17 +14,14 @@ mysql -u root -e "SET GLOBAL log_bin_trust_function_creators = 1;"
 # Backup the current Zabbix proxy configuration
 cp /etc/zabbix/zabbix_proxy.conf /etc/zabbix/zabbix_proxy.conf.bak
 
+# Remove the old Zabbix repository if it exists (Optional but recommended)
+# This will prevent future accidental installations of 6.4 packages
+rm -Rf /etc/apt/sources.list.d/zabbix.list
+
 # Add the Zabbix repository for version 7.0
 wget https://repo.zabbix.com/zabbix/7.0/ubuntu/pool/main/z/zabbix-release/zabbix-release_7.0-1+ubuntu22.04_all.deb
 dpkg -i zabbix-release_7.0-1+ubuntu22.04_all.deb
 apt update
-
-# Remove the old Zabbix repository if it exists (Optional but recommended)
-# This will prevent future accidental installations of 6.4 packages
-if grep -q "deb http://repo.zabbix.com/zabbix/6.4/ubuntu" /etc/apt/sources.list.d/zabbix.list; then
-    sed -i '/deb http:\/\/repo.zabbix.com\/zabbix\/6.4\/ubuntu/d' /etc/apt/sources.list.d/zabbix.list
-    apt update
-fi
 
 # Install the Zabbix proxy 7.0 package
 apt install --only-upgrade zabbix-proxy-mysql
@@ -39,15 +36,6 @@ fi
 
 # Restore the backed-up configuration file. This is crucial as the new package might overwrite it.
 cp /etc/zabbix/zabbix_proxy.conf.bak /etc/zabbix/zabbix_proxy.conf
-
-# Check if the Server parameter in the configuration file is correct.
-# If you use hostname, make sure it resolves correctly.
-SERVER=$(grep "Server=" /etc/zabbix/zabbix_proxy.conf | cut -d '=' -f 2 | tr -d ' ')
-echo "Zabbix Server configured as: $SERVER"
-if [ -z "$SERVER" ]; then
-    echo "ERROR: Server parameter is missing in zabbix_proxy.conf. Please configure it."
-    exit 1
-fi
 
 # Restart the Zabbix proxy service
 systemctl restart zabbix-proxy
