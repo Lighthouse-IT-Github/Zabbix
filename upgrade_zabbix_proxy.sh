@@ -37,11 +37,9 @@ fi
 # Restore the backed-up configuration file. This is crucial as the new package might overwrite it.
 cp /etc/zabbix/zabbix_proxy.conf.bak /etc/zabbix/zabbix_proxy.conf
 
-# Restart the Zabbix proxy service
-systemctl restart zabbix-proxy
+# start the Zabbix proxy service
+systemctl start zabbix-proxy
 
-# Check the status of the Zabbix proxy service
-systemctl status zabbix-proxy
 
 # Clean up downloaded files
 rm zabbix-release_*.deb
