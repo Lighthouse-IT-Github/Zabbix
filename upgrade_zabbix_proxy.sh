@@ -8,6 +8,9 @@ systemctl stop zabbix-proxy
 # Clean up old downloaded files
 rm zabbix-release_*.deb
 
+#Set MySQL settings
+mysql -u root -e "SET GLOBAL log_bin_trust_function_creators = 1;"
+
 # Backup the current Zabbix proxy configuration
 cp /etc/zabbix/zabbix_proxy.conf /etc/zabbix/zabbix_proxy.conf.bak
 
