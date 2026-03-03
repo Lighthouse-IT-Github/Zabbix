@@ -67,18 +67,18 @@ If the script was downloaded from the internet, you may need to unblock it first
 
 The script will ask for:
 
-| Prompt | Description | Default |
+| Prompt | Description | Standard |
 |--------|-------------|---------|
-| VM name | Name for the Hyper-V VM (e.g., `ZBPROXY-SITE01`) | *(required)* |
-| Zabbix version | Version to install from the Zabbix repo | `7.4.7` |
-| Zabbix Server address | IP or FQDN of your Zabbix Server or cluster | *(required)* |
+| VM name | Name for the Hyper-V VM (e.g., `ZBPROXY-SITE01`) | `clientname-proxy` |
+| Zabbix version | Version to install from the Zabbix repo | `Current Zabbix Server version` |
+| Zabbix Server address | IP or FQDN of your Zabbix Server or cluster | `zb.lighthouseit.us` |
 | Proxy hostname | How this proxy appears in the Zabbix frontend | VM name |
 | Network type | DHCP or Static IP configuration | `dhcp` |
 | Virtual switch | Select from available Hyper-V switches | First available |
 | Ubuntu ISO path | Full path to the Ubuntu Server ISO file | *(required)* |
-| Admin username | Linux user account on the VM | `zadmin` |
-| Admin password | Password for the admin account (entered securely) | *(required)* |
-| TLS PSK | Whether to configure PSK encryption | `yes` |
+| Admin username | Linux user account on the VM | `zabbix` |
+| Admin password | Password for the admin account (entered securely) | `used standard password in Hudu` |
+| TLS PSK | Whether to configure PSK encryption | `No` |
 
 ### 4. Wait for Deployment
 
@@ -170,121 +170,6 @@ Each `deployment-info.txt` contains the full deployment summary including PSK ke
 | `/var/log/zabbix-proxy-setup.log` | First-boot setup log |
 | `/var/log/zabbix/zabbix_proxy.log` | Runtime proxy log |
 | `/opt/setup-zabbix-proxy.sh` | Setup script (runs once, then self-disables) |
-
-## How It Works
-
-### Seed ISO Generation
-
-The script creates a small ISO image (`seed.iso`) containing cloud-init `user-data` and `meta-data` files. This ISO is attached as a secondary DVD drive to the VM. When Ubuntu boots from the primary install ISO, it detects the `CIDATA` volume and uses the autoinstall configuration for a fully unattended installation.
-
-ISO creation uses `oscdimg.exe` (Windows ADK) if available, otherwise falls back to the Windows built-in IMAPI2 COM API with a C# helper class for proper IStream handling.
-
-### Password Handling
-
-The admin password is handled through a multi-layered approach:
-1. **Primary:** The script attempts to generate a SHA-512 crypt hash using `openssl` (from Git for Windows) or Python's `crypt` module
-2. **Guaranteed fallback:** A `chpasswd` command runs as a late-command during Ubuntu installation, setting the password from plain text regardless of whether the hash generation succeeded
-
-### First-Boot Provisioning
-
-A systemd oneshot service (`zabbix-proxy-setup.service`) runs after the first boot:
-1. Detects the Ubuntu codename and version
-2. Downloads and installs the Zabbix repository `.deb` package
-3. Installs `zabbix-proxy-sqlite3`
-4. Configures the proxy (server address, hostname, database path, performance tuning)
-5. Sets up TLS PSK encryption if configured
-6. Enables and starts the `zabbix-proxy` service
-7. Disables itself so it does not run again on subsequent boots
-
-## Troubleshooting
-
-| Issue | Cause | Fix |
-|-------|-------|-----|
-| Script won't run (not digitally signed) | PowerShell execution policy | Run with `-ExecutionPolicy Bypass` or unblock the file |
-| VM won't boot from ISO | Secure Boot enabled | Script disables this automatically; verify in VM settings |
-| Ubuntu install hangs or shows manual prompts | Malformed autoinstall YAML | Check that the seed ISO was created successfully; re-run the script |
-| Password doesn't work at login | Hash generation failed silently | The chpasswd fallback should handle this; check setup logs. Reset via recovery mode if needed |
-| Zabbix proxy not installed after boot | No internet on first boot | VM needs internet access to reach repo.zabbix.com. Check DNS and routing |
-| Zabbix repo download fails | Version/codename mismatch | Verify the version exists for your Ubuntu release at repo.zabbix.com |
-| Proxy not connecting to server | Firewall blocking traffic | Proxy needs outbound TCP 10051 to the Zabbix Server |
-| Seed ISO creation fails | IMAPI2 COM error | Install Windows ADK for oscdimg.exe as an alternative |
-
-### Checking Logs
-
-On the VM:
-
-```bash
-# First-boot setup log
-cat /var/log/zabbix-proxy-setup.log
-
-# Systemd service status
-journalctl -u zabbix-proxy-setup.service
-
-# Zabbix proxy runtime log
-tail -50 /var/log/zabbix/zabbix_proxy.log
-
-# Zabbix proxy service status
-systemctl status zabbix-proxy
-```
-
-### Password Recovery
-
-If you cannot log into the VM, reset the password via GRUB recovery:
-1. In Hyper-V Manager, connect to the VM console
-2. Reboot the VM and hold **Shift** during boot (or press **Esc** to reach GRUB)
-3. Select **Advanced options for Ubuntu** then **Recovery mode**
-4. Select **root - Drop to root shell prompt**
-5. Run: `passwd <username>`
-6. Reboot: `reboot`
-
-## Network Requirements
-
-| Direction | Port | Protocol | Purpose |
-|-----------|------|----------|---------|
-| VM to Zabbix Server | 10051/TCP | Outbound | Proxy sends data and receives config |
-| VM to Internet | 443/TCP | Outbound | Package downloads during setup (one-time) |
-| Admin to VM | 22/TCP | Inbound | SSH management access |
-
-## Customization
-
-### Changing VM Specs
-
-Edit these variables in the `Paths and Constants` section of the script:
-
-```powershell
-$RAMBytes      = 4GB       # Startup RAM
-$VCPUCount     = 2         # Virtual CPUs
-$DiskSizeBytes = 60GB      # Virtual disk size
-```
-
-Dynamic memory range is set in the `Set-VM` call:
-
-```powershell
--MemoryMinimumBytes 2GB
--MemoryMaximumBytes 4GB
-```
-
-### Changing the Base Path
-
-All VM files are stored under `C:\Lighthouse\ZBProxy` by default. Change this variable:
-
-```powershell
-$BasePath = "C:\Lighthouse\ZBProxy"
-```
-
-### Post-Deployment Zabbix Tuning
-
-SSH into the VM and edit the proxy config:
-
-```bash
-sudo nano /etc/zabbix/zabbix_proxy.conf
-sudo systemctl restart zabbix-proxy
-```
-
-## Tested On
-
-- Windows 11 23H2 / 24H2 with Hyper-V
-- Ubuntu Server 24.04.4 LTS
 - Zabbix 7.4.x (SQLite backend)
 
 ## License
