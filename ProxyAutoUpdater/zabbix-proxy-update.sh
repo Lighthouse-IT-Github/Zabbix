@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# zabbix-proxy-update.sh v1.2.1
+# zabbix-proxy-update.sh v1.2.2
 # =============================================================================
 # Checks a remote version file and updates the local Zabbix proxy to match.
 #
@@ -15,6 +15,7 @@
 # =============================================================================
 
 set -euo pipefail
+export DEBIAN_FRONTEND=noninteractive
 
 # -- Configuration ------------------------------------------------------------
 VERSION_URL="https://raw.githubusercontent.com/Lighthouse-IT-Github/TikLive/refs/heads/main/zblive"
@@ -82,7 +83,7 @@ cmd_install() {
     log "Script installed to ${INSTALL_PATH}"
 
     printf '%s\n' \
-        "# Zabbix proxy auto-update -- installed by zabbix-proxy-update.sh v1.2.1" \
+        "# Zabbix proxy auto-update -- installed by zabbix-proxy-update.sh v1.2.2" \
         "SHELL=/bin/bash" \
         "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
         "${CRON_SCHEDULE} root ${INSTALL_PATH} update >> ${LOG_FILE} 2>&1" \
@@ -205,9 +206,10 @@ cmd_update() {
     apt-get update -qq || die "apt-get update failed."
 
     log "Installing ${ZABBIX_PROXY_PKG} version ${TARGET_VERSION}* ..."
-    if ! apt-get install -y -qq "${ZABBIX_PROXY_PKG}=${TARGET_VERSION}*" 2>/dev/null; then
+    local APT_OPTS='-y -qq -o Dpkg::Options::=--force-confold -o Dpkg::Options::=--force-confdef'
+    if ! apt-get install ${APT_OPTS} "${ZABBIX_PROXY_PKG}=${TARGET_VERSION}*" 2>/dev/null; then
         log "Retrying install with epoch prefix 1:${TARGET_VERSION}* ..."
-        apt-get install -y -qq "${ZABBIX_PROXY_PKG}=1:${TARGET_VERSION}*" ||
+        apt-get install ${APT_OPTS} "${ZABBIX_PROXY_PKG}=1:${TARGET_VERSION}*" ||
             die "Failed to install ${ZABBIX_PROXY_PKG} version ${TARGET_VERSION}."
     fi
 
@@ -246,7 +248,7 @@ cmd_update() {
 # =============================================================================
 usage() {
     echo ""
-    echo "  Zabbix Proxy Auto-Update v1.2.1"
+    echo "  Zabbix Proxy Auto-Update v1.2.2"
     echo "  --------------------------------"
     echo "  Usage: sudo $0 <command>"
     echo ""
