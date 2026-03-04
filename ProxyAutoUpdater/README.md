@@ -13,15 +13,16 @@ The script checks a remote version file every 30 minutes. If the installed Zabbi
 
 ## Quick Start
 
+1. Download `zabbix-proxy-update.sh` from the [Lighthouse-IT-Github/TikLive](https://github.com/Lighthouse-IT-Github/TikLive) repository to your local machine
+2. Copy the script to the target server and install:
+
 ```bash
-# 1. Download the script
-curl -fsSL -o zabbix-proxy-update.sh https://raw.githubusercontent.com/Lighthouse-IT-Github/TikLive/refs/heads/main/zabbix-proxy-update.sh
+# Copy to the server
+scp zabbix-proxy-update.sh user@proxy-server:/tmp/
 
-# 2. Make it executable
-chmod +x zabbix-proxy-update.sh
-
-# 3. Install (copies script to /usr/local/bin and creates cron job)
-sudo ./zabbix-proxy-update.sh install
+# SSH in and install
+ssh user@proxy-server
+sudo bash /tmp/zabbix-proxy-update.sh install
 ```
 
 That's it. The script will now check for updates every 30 minutes.
