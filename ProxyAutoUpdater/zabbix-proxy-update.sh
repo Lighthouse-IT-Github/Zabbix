@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# zabbix-proxy-update.sh v1.2.0
+# zabbix-proxy-update.sh v1.2.1
 # =============================================================================
 # Checks a remote version file and updates the local Zabbix proxy to match.
 #
@@ -82,7 +82,7 @@ cmd_install() {
     log "Script installed to ${INSTALL_PATH}"
 
     printf '%s\n' \
-        "# Zabbix proxy auto-update -- installed by zabbix-proxy-update.sh v1.2.0" \
+        "# Zabbix proxy auto-update -- installed by zabbix-proxy-update.sh v1.2.1" \
         "SHELL=/bin/bash" \
         "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
         "${CRON_SCHEDULE} root ${INSTALL_PATH} update >> ${LOG_FILE} 2>&1" \
@@ -154,7 +154,7 @@ cmd_status() {
     else
         echo "  Cron job          : Not installed"
     fi
-    echo "  Ubuntu codename   : $(lsb_release -cs)"
+    echo "  Ubuntu version    : $(lsb_release -rs)"
     echo ""
 }
 
@@ -165,9 +165,9 @@ cmd_update() {
     check_root
     check_dependencies
 
-    local UBUNTU_CODENAME
-    UBUNTU_CODENAME="$(lsb_release -cs)"
-    log "Detected Ubuntu codename: ${UBUNTU_CODENAME}"
+    local UBUNTU_VERSION
+    UBUNTU_VERSION="$(lsb_release -rs)"
+    log "Detected Ubuntu version: ${UBUNTU_VERSION}"
 
     log "Fetching target version from ${VERSION_URL} ..."
     local TARGET_VERSION
@@ -189,12 +189,12 @@ cmd_update() {
     TARGET_MAJOR_MINOR="$(echo "${TARGET_VERSION}" | cut -d. -f1,2)"
     log "Target repo branch: ${TARGET_MAJOR_MINOR}"
 
-    local REPO_DEB_URL="${ZABBIX_REPO_BASE}/${TARGET_MAJOR_MINOR}/ubuntu/pool/main/z/zabbix-release/zabbix-release_latest_${TARGET_MAJOR_MINOR}+ubuntu${UBUNTU_CODENAME}_all.deb"
+    local REPO_DEB_URL="${ZABBIX_REPO_BASE}/${TARGET_MAJOR_MINOR}/release/ubuntu/pool/main/z/zabbix-release/zabbix-release_latest_${TARGET_MAJOR_MINOR}+ubuntu${UBUNTU_VERSION}_all.deb"
     local REPO_DEB_TMP="/tmp/zabbix-release_${TARGET_MAJOR_MINOR}.deb"
 
     log "Downloading Zabbix repo package: ${REPO_DEB_URL}"
     if ! curl -fsSL --max-time 60 -o "${REPO_DEB_TMP}" "${REPO_DEB_URL}"; then
-        die "Failed to download Zabbix release package. Check that ${TARGET_MAJOR_MINOR} supports Ubuntu ${UBUNTU_CODENAME}."
+        die "Failed to download Zabbix release package. Check that ${TARGET_MAJOR_MINOR} supports Ubuntu ${UBUNTU_VERSION}."
     fi
 
     log "Installing Zabbix repo package ..."
@@ -246,7 +246,7 @@ cmd_update() {
 # =============================================================================
 usage() {
     echo ""
-    echo "  Zabbix Proxy Auto-Update v1.2.0"
+    echo "  Zabbix Proxy Auto-Update v1.2.1"
     echo "  --------------------------------"
     echo "  Usage: sudo $0 <command>"
     echo ""
