@@ -1,0 +1,251 @@
+zabbix_export:
+  version: '7.2'
+  template_groups:
+    - uuid: 92701bbba5d24180b9a530a1ad331450
+      name: 'Templates/Web Monitoring'
+  templates:
+    - uuid: e7a7832453dd42719330b7e3aae46b52
+      template: 'Website Availability Monitor'
+      name: 'Website Availability Monitor'
+      description: |
+        v1.0.2 — Website Availability & SSL Certificate Monitor
+        
+        Monitors HTTP availability, response time, and SSL certificate expiration.
+        
+        USAGE:
+          1. Import this template
+          2. Create a host (e.g., "example.com") or use an existing one
+          3. Link this template to the host
+          4. Override the {$URL} and {$URL.HOST} macros on the host level
+        
+        MACROS TO OVERRIDE PER HOST:
+          {$URL}       — Full URL to monitor (e.g., https://example.com)
+          {$URL.HOST}  — Hostname only (e.g., example.com)
+        
+        OPTIONAL MACRO OVERRIDES:
+          {$URL.PORT}                    — HTTPS port (default: 443)
+          {$URL.RESPONSE_TIME_THRESHOLD} — Response time warning in seconds (default: 3)
+          {$URL.SSL_WARN_DAYS}           — SSL expiry warning threshold in days (default: 30)
+          {$URL.SSL_CRIT_DAYS}           — SSL expiry critical threshold in days (default: 7)
+          {$URL.CHECK_INTERVAL}          — Web scenario check interval (default: 3m)
+          {$URL.SSL_CHECK_INTERVAL}      — SSL cert check interval (default: 1h)
+          {$URL.EXPECTED_STATUS}         — Expected HTTP status codes (default: 200)
+        
+        Built for Zabbix 7.2 — Lighthouse IT
+      groups:
+        - name: 'Templates/Web Monitoring'
+      macros:
+        - macro: '{$URL}'
+          value: 'https://example.com'
+          description: 'Full URL to monitor (include https://)'
+        - macro: '{$URL.HOST}'
+          value: 'example.com'
+          description: 'Hostname only — used by SSL certificate check'
+        - macro: '{$URL.PORT}'
+          value: '443'
+          description: 'HTTPS port for SSL certificate check'
+        - macro: '{$URL.RESPONSE_TIME_THRESHOLD}'
+          value: '3'
+          description: 'Response time threshold in seconds — triggers warning when exceeded'
+        - macro: '{$URL.SSL_WARN_DAYS}'
+          value: '30'
+          description: 'Days before SSL cert expiry to raise a warning'
+        - macro: '{$URL.SSL_CRIT_DAYS}'
+          value: '7'
+          description: 'Days before SSL cert expiry to raise a critical alert'
+        - macro: '{$URL.CHECK_INTERVAL}'
+          value: '3m'
+          description: 'Web scenario polling interval'
+        - macro: '{$URL.SSL_CHECK_INTERVAL}'
+          value: '1h'
+          description: 'SSL certificate polling interval'
+        - macro: '{$URL.EXPECTED_STATUS}'
+          value: '200'
+          description: 'Expected HTTP response status codes (comma-separated)'
+      tags:
+        - tag: class
+          value: web
+        - tag: template
+          value: 'website-availability'
+
+      # ──────────────────────────────────────
+      #  ITEMS — SSL Certificate Monitoring
+      # ──────────────────────────────────────
+      items:
+        - uuid: 431039ec21d4438282408fe88f6553fd
+          name: 'SSL: Raw certificate data [{$URL.HOST}]'
+          type: SIMPLE
+          key: 'web.certificate.get[{$URL.HOST},{$URL.PORT}]'
+          delay: '{$URL.SSL_CHECK_INTERVAL}'
+          history: '0'
+          trends: '0'
+          value_type: TEXT
+          description: 'Master item — retrieves full SSL certificate JSON. All other SSL items depend on this.'
+          tags:
+            - tag: component
+              value: ssl
+
+        - uuid: 8b56349cd35d4a65b5887aa9108e8191
+          name: 'SSL: Certificate expiry timestamp [{$URL.HOST}]'
+          type: DEPENDENT
+          key: 'web.certificate.expiry_timestamp[{$URL.HOST}]'
+          delay: '0'
+          value_type: UNSIGNED
+          units: unixtime
+          description: 'Certificate not_after field as a Unix epoch timestamp'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.x509.not_after'
+          master_item:
+            key: 'web.certificate.get[{$URL.HOST},{$URL.PORT}]'
+          tags:
+            - tag: component
+              value: ssl
+
+        - uuid: 56d157f97dce41d29950a2451efd24b7
+          name: 'SSL: Days until certificate expiry [{$URL.HOST}]'
+          type: DEPENDENT
+          key: 'web.certificate.days_until_expiry[{$URL.HOST}]'
+          delay: '0'
+          value_type: FLOAT
+          units: days
+          description: 'Calculated number of days remaining until the SSL certificate expires'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.x509.not_after'
+            - type: JAVASCRIPT
+              parameters:
+                - |
+                  var expiry = Number(value);
+                  var now = Math.floor(Date.now() / 1000);
+                  return Math.floor((expiry - now) / 86400);
+          master_item:
+            key: 'web.certificate.get[{$URL.HOST},{$URL.PORT}]'
+          tags:
+            - tag: component
+              value: ssl
+
+        - uuid: 2736873446f74067a78a3098f500abde
+          name: 'SSL: Certificate issuer [{$URL.HOST}]'
+          type: DEPENDENT
+          key: 'web.certificate.issuer[{$URL.HOST}]'
+          delay: '0'
+          history: 7d
+          trends: '0'
+          value_type: TEXT
+          description: 'Certificate issuer (e.g., Let''s Encrypt, DigiCert)'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.x509.issuer'
+          master_item:
+            key: 'web.certificate.get[{$URL.HOST},{$URL.PORT}]'
+          tags:
+            - tag: component
+              value: ssl
+
+        - uuid: 8ddfa52a67bf403ca83182e5f7d64456
+          name: 'SSL: Certificate subject [{$URL.HOST}]'
+          type: DEPENDENT
+          key: 'web.certificate.subject[{$URL.HOST}]'
+          delay: '0'
+          history: 7d
+          trends: '0'
+          value_type: TEXT
+          description: 'Certificate subject / common name'
+          preprocessing:
+            - type: JSONPATH
+              parameters:
+                - '$.x509.subject'
+          master_item:
+            key: 'web.certificate.get[{$URL.HOST},{$URL.PORT}]'
+          tags:
+            - tag: component
+              value: ssl
+
+      # ──────────────────────────────────────
+      #  WEB SCENARIO — Availability Check
+      # ──────────────────────────────────────
+      httptests:
+        - uuid: 4e8870148c094e0f9091514f59370c23
+          name: 'Website Availability [{$URL}]'
+          delay: '{$URL.CHECK_INTERVAL}'
+          attempts: '3'
+          agent: 'Mozilla/5.0 (compatible; Zabbix; +https://www.zabbix.com)'
+          steps:
+            - name: 'Check Homepage'
+              url: '{$URL}'
+              status_codes: '{$URL.EXPECTED_STATUS}'
+              timeout: 15s
+
+  # ──────────────────────────────────────
+  #  TRIGGERS — Top-level under zabbix_export
+  # ──────────────────────────────────────
+  triggers:
+    - uuid: b0f357c7e47d43b3bf6c75e4a2e0eeca
+      expression: 'last(/Website Availability Monitor/web.test.fail[Website Availability [{$URL}]])>0'
+      name: 'Website {$URL} is DOWN'
+      priority: HIGH
+      description: 'The web scenario has failed after all retry attempts. The site is not returning the expected HTTP status code.'
+      manual_close: 'YES'
+      tags:
+        - tag: scope
+          value: availability
+
+    - uuid: a9db2d6a6b12471f8f61e300374ae980
+      expression: 'last(/Website Availability Monitor/web.test.time[Website Availability [{$URL}],Check Homepage])>{$URL.RESPONSE_TIME_THRESHOLD}'
+      name: 'Website {$URL} response time >{$URL.RESPONSE_TIME_THRESHOLD}s'
+      priority: WARNING
+      description: 'Website response time exceeds the configured threshold ({$URL.RESPONSE_TIME_THRESHOLD} seconds).'
+      manual_close: 'YES'
+      dependencies:
+        - name: 'Website {$URL} is DOWN'
+          expression: 'last(/Website Availability Monitor/web.test.fail[Website Availability [{$URL}]])>0'
+      tags:
+        - tag: scope
+          value: performance
+
+    - uuid: 2a83dacd491a4f4a8e17ac278a77e7e3
+      expression: 'last(/Website Availability Monitor/web.certificate.days_until_expiry[{$URL.HOST}])<{$URL.SSL_WARN_DAYS}'
+      name: 'SSL certificate on {$URL.HOST} expires in <{$URL.SSL_WARN_DAYS} days'
+      priority: WARNING
+      description: 'The SSL certificate is approaching its expiration date. Renew or replace the certificate.'
+      manual_close: 'YES'
+      dependencies:
+        - name: 'SSL certificate on {$URL.HOST} expires in <{$URL.SSL_CRIT_DAYS} days'
+          expression: 'last(/Website Availability Monitor/web.certificate.days_until_expiry[{$URL.HOST}])<{$URL.SSL_CRIT_DAYS}'
+      tags:
+        - tag: scope
+          value: ssl
+
+    - uuid: 9691e13d6ac8438190d9b2332a0467bd
+      expression: 'last(/Website Availability Monitor/web.certificate.days_until_expiry[{$URL.HOST}])<{$URL.SSL_CRIT_DAYS}'
+      name: 'SSL certificate on {$URL.HOST} expires in <{$URL.SSL_CRIT_DAYS} days'
+      priority: HIGH
+      description: 'The SSL certificate is about to expire. Immediate renewal required to prevent service disruption.'
+      manual_close: 'YES'
+      tags:
+        - tag: scope
+          value: ssl
+
+    - uuid: d76fae32261e4169a5c652d177badb1d
+      expression: 'change(/Website Availability Monitor/web.certificate.issuer[{$URL.HOST}])<>0 and length(last(/Website Availability Monitor/web.certificate.issuer[{$URL.HOST}]))>0'
+      name: 'SSL certificate issuer changed on {$URL.HOST}'
+      priority: INFO
+      description: 'The SSL certificate issuer has changed. This may be expected (e.g., renewal) or could indicate a security issue.'
+      manual_close: 'YES'
+      tags:
+        - tag: scope
+          value: ssl
+
+    - uuid: 8910106b17774f2297de46afb9ecb886
+      expression: 'nodata(/Website Availability Monitor/web.certificate.days_until_expiry[{$URL.HOST}],7200)=1'
+      name: 'SSL certificate data not collected for {$URL.HOST}'
+      priority: WARNING
+      description: 'No SSL certificate data has been received for over 2 hours. Check connectivity or DNS resolution from the Zabbix server/proxy.'
+      manual_close: 'YES'
+      tags:
+        - tag: scope
+          value: ssl
