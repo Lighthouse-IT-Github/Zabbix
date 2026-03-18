@@ -291,11 +291,32 @@ Update the `zblive` file in the GitHub repository to the new version number. Thi
 
 ---
 
+## Upgrades, Downgrades, and Rollbacks
+
+The update script supports both upgrades and downgrades. When you change the version in `zblive`, containers will download the matching binary regardless of whether the new version is higher or lower.
+
+### Patch-level changes (e.g. 7.2.3 → 7.2.15)
+
+The binary is replaced and the proxy restarts. The SQLite database is preserved since the schema is unchanged within a major.minor branch.
+
+### Major.minor changes (e.g. 7.2.x → 7.4.x or 7.4.x → 7.2.x)
+
+The update script detects the major.minor change and automatically:
+
+1. Backs up the existing database (e.g. `zabbix_proxy.db.7.4.7.bak`)
+2. Deletes the database
+3. Reinitializes a fresh database from `schema.sql`
+4. Restarts the proxy
+
+Any buffered monitoring data that hasn't been sent to the Zabbix server will be lost during a major.minor change. For major.minor upgrades in production, consider rebuilding the container image with `build.ps1` / `build.sh` to ensure the schema.sql matches the new version.
+
+---
+
 ## Version History
 
 | Version | Changes |
 |---|---|
-| **v3.2.0** | Added OCI normalization via skopeo for RouterOS < 7.21 compatibility. Build scripts now normalize tarballs automatically. |
+| **v3.2.0** | Added OCI normalization via skopeo for RouterOS < 7.21 compatibility. Database handling for major.minor version changes (backup, wipe, reinitialize). |
 | v3.1.0 | Added ARM64 support (RB5009, CCR2004, CCR2116). Build scripts produce both ARM32 and ARM64 images. Compile script produces both binaries. Update script auto-detects architecture. |
 | v3.0.0 | Two-part architecture: lean container + Windows compile script. Auto-update from IIS. SSH always on. |
 | v2.x | Various iterations on base image (Alpine vs Debian) and self-compile approach. |

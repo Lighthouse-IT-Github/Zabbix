@@ -1,6 +1,6 @@
 #!/bin/ash
 # =============================================================================
-# zabbix-proxy-update.sh v3.1.0 (Alpine Container Edition)
+# zabbix-proxy-update.sh v3.2.0 (Alpine Container Edition)
 # =============================================================================
 # Checks GitHub version file, downloads pre-compiled binary from IIS server.
 # Auto-detects ARM32 vs ARM64 and downloads the correct binary.
@@ -22,6 +22,8 @@ BINARY_BASE_URL="http://checkin.lighthouseit.us/Zabbix"
 
 VERSION_FILE="/etc/zabbix/.installed_version"
 PROXY_BIN="/usr/sbin/zabbix_proxy"
+ZABBIX_DB_PATH="${ZBX_DBPATH:-/var/lib/zabbix/zabbix_proxy.db}"
+ZABBIX_SCHEMA="/usr/share/zabbix/database/sqlite3/schema.sql"
 LOG_FILE="/var/log/zabbix-proxy-update.log"
 
 HEALTH_CHECK_RETRIES=5
@@ -176,6 +178,37 @@ cmd_update() {
     cp -f "${TMP_BIN}" "${PROXY_BIN}"
     rm -f "${TMP_BIN}"
 
+    # -- Handle database schema changes on major.minor version change ----------
+    # Zabbix stores its version in the SQLite database. If the major.minor
+    # changes (e.g. 7.4.x -> 7.2.x or 7.2.x -> 7.4.x), the schema is
+    # incompatible and the database must be wiped so the new binary recreates it.
+    local INSTALLED_MAJOR_MINOR TARGET_MAJOR_MINOR
+    INSTALLED_MAJOR_MINOR="$(echo "${INSTALLED_VERSION}" | cut -d. -f1,2)"
+    TARGET_MAJOR_MINOR="$(echo "${TARGET_VERSION}" | cut -d. -f1,2)"
+
+    if [ "${INSTALLED_MAJOR_MINOR}" != "${TARGET_MAJOR_MINOR}" ]; then
+        log "Major.minor version change detected (${INSTALLED_MAJOR_MINOR} -> ${TARGET_MAJOR_MINOR})."
+        if [ -f "${ZABBIX_DB_PATH}" ]; then
+            local DB_BACKUP="${ZABBIX_DB_PATH}.${INSTALLED_VERSION}.bak"
+            cp -f "${ZABBIX_DB_PATH}" "${DB_BACKUP}"
+            log "Backed up database to ${DB_BACKUP}"
+            rm -f "${ZABBIX_DB_PATH}"
+            log "Removed old database (schema incompatible across major.minor versions)."
+        fi
+        # Reinitialize database with current schema for the new binary
+        # Note: schema.sql is from the container build version. For cross-branch
+        # updates, rebuild the container if the proxy fails to start.
+        if [ -f "${ZABBIX_SCHEMA}" ]; then
+            /usr/bin/sqlite3 "${ZABBIX_DB_PATH}" < "${ZABBIX_SCHEMA}"
+            chown zabbix:zabbix "${ZABBIX_DB_PATH}"
+            log "Reinitialized database from schema.sql"
+        else
+            log "Warning: schema.sql not found at ${ZABBIX_SCHEMA}. New binary will need to create the DB."
+        fi
+    else
+        log "Patch-level change only (${INSTALLED_MAJOR_MINOR}). Database schema unchanged."
+    fi
+
     echo "${TARGET_VERSION}" > "${VERSION_FILE}"
     log "Binary replaced. Version file updated to ${TARGET_VERSION}."
 
@@ -211,7 +244,7 @@ usage() {
     arch_label="$(get_arch_label)"
 
     echo ""
-    echo "  Zabbix Proxy Auto-Update v3.1.0 (Alpine Container)"
+    echo "  Zabbix Proxy Auto-Update v3.2.0 (Alpine Container)"
     echo "  ---------------------------------------------------"
     echo "  Usage: $0 <command>"
     echo ""
