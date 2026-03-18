@@ -1,16 +1,18 @@
 #!/bin/bash
-# Build script for Zabbix Proxy ARM containers v3.1.0
+# Build script for Zabbix Proxy ARM containers v3.2.0
 # Builds BOTH ARM32 (RB4011) and ARM64 (RB5009, CCR2004, CCR2116)
+# Includes OCI normalization via skopeo for RouterOS compatibility
 # For MikroTik RouterOS Container deployment
 # Works on: Linux, macOS (Intel & Apple Silicon)
 
 set -e
 
 IMAGE_BASE="zabbix-proxy"
+SKOPEO_IMAGE="quay.io/skopeo/stable:latest"
 
 echo "=============================================="
 echo "Zabbix Proxy ARM Builder for MikroTik RouterOS"
-echo "v3.1.0 - ARM32 + ARM64"
+echo "v3.2.0 - ARM32 + ARM64 (OCI-compliant)"
 echo "=============================================="
 echo ""
 echo "Builds containers for:"
@@ -55,6 +57,42 @@ if ! docker buildx version &> /dev/null; then
     exit 1
 fi
 
+# -- OCI normalization via skopeo ---------------------------------------------
+# RouterOS (especially < 7.21) cannot handle multi-platform or non-standard
+# OCI image tarballs. Running skopeo copy normalizes the archive format.
+# See: https://tangentsoft.com/mikrotik/wiki?name=Container+Limitations
+normalize_tar() {
+    local TAR_FILE="$1"
+    local TAR_DIR
+    TAR_DIR="$(cd "$(dirname "$TAR_FILE")" && pwd)"
+    local TAR_NAME
+    TAR_NAME="$(basename "$TAR_FILE")"
+    local RAW_NAME="raw_${TAR_NAME}"
+
+    echo "  Normalizing OCI archive with skopeo..."
+    mv "$TAR_FILE" "${TAR_DIR}/${RAW_NAME}"
+
+    docker run --rm \
+        -v "${TAR_DIR}:/work" \
+        "$SKOPEO_IMAGE" \
+        copy \
+        "docker-archive:/work/${RAW_NAME}" \
+        "docker-archive:/work/${TAR_NAME}"
+
+    if [ $? -ne 0 ]; then
+        echo "  WARNING: skopeo normalization failed, using original tar"
+        mv "${TAR_DIR}/${RAW_NAME}" "$TAR_FILE"
+    else
+        rm -f "${TAR_DIR}/${RAW_NAME}"
+        echo "  OCI normalization complete."
+    fi
+}
+
+# Pull skopeo image ahead of time
+echo ""
+echo "Pulling skopeo image for OCI normalization..."
+docker pull "$SKOPEO_IMAGE" || echo "WARNING: Could not pull skopeo image. Will try at normalization step."
+
 BUILDER_NAME="arm-builder"
 if ! docker buildx inspect "$BUILDER_NAME" &> /dev/null 2>&1; then
     echo "Creating buildx builder with ARM support..."
@@ -91,6 +129,7 @@ fi
 echo ""
 echo "ARM32 build complete. Exporting..."
 docker save "${ARM32_IMAGE}" -o "$ARM32_TAR"
+normalize_tar "$ARM32_TAR"
 
 # ---- Build ARM64 ------------------------------------------------------------
 ARM64_IMAGE="${IMAGE_BASE}-arm64:${ZABBIX_VERSION}"
@@ -118,6 +157,7 @@ fi
 echo ""
 echo "ARM64 build complete. Exporting..."
 docker save "${ARM64_IMAGE}" -o "$ARM64_TAR"
+normalize_tar "$ARM64_TAR"
 
 # ---- Summary ----------------------------------------------------------------
 get_size() {

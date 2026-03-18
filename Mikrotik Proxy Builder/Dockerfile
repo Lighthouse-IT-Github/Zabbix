@@ -1,5 +1,5 @@
 # Zabbix Proxy 7.2.3 for ARM (MikroTik RouterOS)
-# v3.1.0 - Supports ARM32 (RB4011) and ARM64 (RB5009, CCR2004, CCR2116)
+# v3.2.0 - Supports ARM32 (RB4011) and ARM64 (RB5009, CCR2004, CCR2116)
 # Build with: docker buildx build --platform linux/arm/v7 -t zabbix-proxy-arm32:7.2.3 --load .
 #         or: docker buildx build --platform linux/arm64   -t zabbix-proxy-arm64:7.2.3 --load .
 

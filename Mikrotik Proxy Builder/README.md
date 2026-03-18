@@ -71,6 +71,8 @@ Both ARM32 and ARM64 containers are built from the same Dockerfile. The architec
 
 - Docker Desktop (Windows/macOS) or Docker Engine (Linux) with buildx support
 
+> **OCI Compliance:** RouterOS versions prior to 7.21 may fail to extract container images produced by Docker buildx due to non-standard OCI archive formatting. The build scripts automatically normalize tarballs using [skopeo](https://github.com/containers/skopeo) (run via Docker container — no extra install needed). See [Container Limitations](https://tangentsoft.com/mikrotik/wiki?name=Container+Limitations#compliance) for details.
+
 ### Build Both Container Images
 
 **Windows (PowerShell):**
@@ -91,7 +93,57 @@ Enter the Zabbix version when prompted. Both images are built in sequence:
 | `zabbix-proxy-arm32-<version>.tar` | ARM32 (armv7) | RB4011 |
 | `zabbix-proxy-arm64-<version>.tar` | ARM64 (aarch64) | RB5009, CCR2004, CCR2116 |
 
+### Deploy to MikroTik
 
+#### Enable Container Support
+
+```routeros
+/system/device-mode/update container=yes
+```
+> **Warning:** The router will reboot.
+
+#### Create Container Network
+
+```routeros
+/interface/veth/add name=veth-zabbix address=172.17.0.2/24 gateway=172.17.0.1
+/interface/bridge/add name=br-containers
+/interface/bridge/port/add bridge=br-containers interface=veth-zabbix
+/ip/address/add address=172.17.0.1/24 interface=br-containers
+/ip/firewall/nat/add chain=srcnat src-address=172.17.0.0/24 action=masquerade
+```
+
+#### Upload Container Image
+
+Upload the correct `.tar` for the device via WinBox (Files → drag and drop) or SCP:
+
+```bash
+# RB4011 (ARM32)
+scp zabbix-proxy-arm32-7.2.3.tar admin@<router-ip>:/
+
+# RB5009, CCR2004, CCR2116 (ARM64)
+scp zabbix-proxy-arm64-7.2.3.tar admin@<router-ip>:/
+```
+
+#### Configure Environment Variables
+
+```routeros
+/container/envs
+add name=zabbix-proxy key=ZBX_SERVER_HOST value=zabbix.example.com
+add name=zabbix-proxy key=ZBX_HOSTNAME value=<unique-proxy-name>
+add name=zabbix-proxy key=SSH_ROOT_PASSWORD value=YourSecurePassword
+```
+
+#### Create and Start the Container
+
+```routeros
+# ARM32 (RB4011)
+/container/add file=zabbix-proxy-arm32-7.2.3.tar interface=veth-zabbix root-dir=disk1/zabbix-proxy hostname=rb4011-proxy envlist=zabbix-proxy logging=yes
+
+# ARM64 (RB5009, CCR2004, CCR2116)
+/container/add file=zabbix-proxy-arm64-7.2.3.tar interface=veth-zabbix root-dir=disk1/zabbix-proxy hostname=rb5009-proxy envlist=zabbix-proxy logging=yes
+
+/container/start 0
+```
 
 ### Container Features
 
@@ -134,6 +186,17 @@ Enter the Zabbix version when prompted. Both images are built in sequence:
 | `ZBX_UNREACHABLEDELAY` | Unreachable delay (seconds) | `15` |
 | `ZBX_DBPATH` | SQLite database path | `/var/lib/zabbix/zabbix_proxy.db` |
 
+#### TLS Settings
+
+| Variable | Description |
+|---|---|
+| `ZBX_TLSCONNECT` | Outgoing TLS mode (`psk`, `cert`) |
+| `ZBX_TLSACCEPT` | Incoming TLS mode |
+| `ZBX_TLSPSKIDENTITY` | PSK identity string |
+| `ZBX_TLSPSKFILE` | Path to PSK file |
+| `ZBX_TLSCAFILE` | Path to CA certificate |
+| `ZBX_TLSCERTFILE` | Path to TLS certificate |
+| `ZBX_TLSKEYFILE` | Path to TLS private key |
 
 #### Container Settings
 
@@ -147,7 +210,7 @@ Enter the Zabbix version when prompted. Both images are built in sequence:
 SSH into the container:
 
 ```bash
-ssh root@IP Address
+ssh root@172.17.0.2
 ```
 
 ```bash
@@ -232,7 +295,8 @@ Update the `zblive` file in the GitHub repository to the new version number. Thi
 
 | Version | Changes |
 |---|---|
-| **v3.1.0** | Added ARM64 support (RB5009, CCR2004, CCR2116). Build scripts produce both ARM32 and ARM64 images. Compile script produces both binaries. Update script auto-detects architecture. |
+| **v3.2.0** | Added OCI normalization via skopeo for RouterOS < 7.21 compatibility. Build scripts now normalize tarballs automatically. |
+| v3.1.0 | Added ARM64 support (RB5009, CCR2004, CCR2116). Build scripts produce both ARM32 and ARM64 images. Compile script produces both binaries. Update script auto-detects architecture. |
 | v3.0.0 | Two-part architecture: lean container + Windows compile script. Auto-update from IIS. SSH always on. |
 | v2.x | Various iterations on base image (Alpine vs Debian) and self-compile approach. |
 | v1.0.0 | Original Alpine container by Gabriel. Build-time compile only. |
