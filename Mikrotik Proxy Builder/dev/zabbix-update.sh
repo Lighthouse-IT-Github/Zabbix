@@ -31,7 +31,7 @@ ZABBIX_DB_PATH="${ZBX_DBPATH:-/var/lib/zabbix/zabbix_proxy.db}"
 ZABBIX_SCHEMA="/usr/share/zabbix/database/sqlite3/schema.sql"
 LOG_FILE="/var/log/zabbix-update.log"
 
-HEALTH_CHECK_RETRIES=5
+HEALTH_CHECK_RETRIES=8
 HEALTH_CHECK_INTERVAL=5
 # -----------------------------------------------------------------------------
 

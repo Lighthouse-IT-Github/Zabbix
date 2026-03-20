@@ -154,25 +154,27 @@ start_proxy
 start_agent2
 
 # Monitor both processes — restart whichever exits
+# Uses polling instead of wait -n (not supported in BusyBox ash)
 while true; do
-    # Wait for any child to exit
-    wait -n 2>/dev/null || true
+    sleep 3
 
-    # Check proxy
-    if [ $PROXY_PID -ne 0 ] && ! kill -0 "$PROXY_PID" 2>/dev/null; then
-        log "zabbix_proxy exited, restarting in 3s..."
-        PROXY_PID=0
-        sleep 3
-        start_proxy
+    # Check proxy — try to reap zombie first with wait, then check if alive
+    if [ $PROXY_PID -ne 0 ]; then
+        if ! kill -0 "$PROXY_PID" 2>/dev/null; then
+            wait "$PROXY_PID" 2>/dev/null || true
+            log "zabbix_proxy exited, restarting..."
+            PROXY_PID=0
+            start_proxy
+        fi
     fi
 
     # Check agent2
-    if [ "$RUN_AGENT2" = "true" ] && [ $AGENT2_PID -ne 0 ] && ! kill -0 "$AGENT2_PID" 2>/dev/null; then
-        log "zabbix_agent2 exited, restarting in 3s..."
-        AGENT2_PID=0
-        sleep 3
-        start_agent2
+    if [ "$RUN_AGENT2" = "true" ] && [ $AGENT2_PID -ne 0 ]; then
+        if ! kill -0 "$AGENT2_PID" 2>/dev/null; then
+            wait "$AGENT2_PID" 2>/dev/null || true
+            log "zabbix_agent2 exited, restarting..."
+            AGENT2_PID=0
+            start_agent2
+        fi
     fi
-
-    sleep 1
 done
