@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 # =============================================================================
-# zabbix-proxy-update.sh v1.2.2
+# zabbix-proxy-update.sh v1.3.0
 # =============================================================================
-# Checks a remote version file and updates the local Zabbix proxy to match.
+# Checks a remote version file and updates the local Zabbix proxy and agent
+# to match. Auto-detects which agent is installed (zabbix-agent or
+# zabbix-agent2). If no agent is found, installs zabbix-agent2.
 #
 # Usage:
-#   sudo ./zabbix-proxy-update.sh install     Install script + daily cron job
+#   sudo ./zabbix-proxy-update.sh install     Install script + cron job
 #   sudo ./zabbix-proxy-update.sh uninstall   Remove script + cron job
 #   sudo ./zabbix-proxy-update.sh update      Run update check immediately
 #   sudo ./zabbix-proxy-update.sh status      Show current vs target version
@@ -20,7 +22,7 @@ export DEBIAN_FRONTEND=noninteractive
 # -- Configuration ------------------------------------------------------------
 VERSION_URL="https://raw.githubusercontent.com/Lighthouse-IT-Github/TikLive/refs/heads/main/zblive"
 ZABBIX_PROXY_PKG="zabbix-proxy-sqlite3"   # Change to zabbix-proxy-mysql if applicable
-ZABBIX_SERVICE="zabbix-proxy"
+ZABBIX_AGENT_DEFAULT="zabbix-agent2"      # Installed if no agent is found
 HEALTH_CHECK_RETRIES=5
 HEALTH_CHECK_INTERVAL=5                   # seconds between retries
 ZABBIX_REPO_BASE="https://repo.zabbix.com/zabbix"
@@ -48,27 +50,95 @@ check_root() {
 
 check_dependencies() {
     for cmd in curl apt dpkg systemctl lsb_release; do
-        command -v "$cmd" &>/dev/null || die "Required command '$cmd' not found." 
+        command -v "$cmd" &>/dev/null || die "Required command '$cmd' not found."
     done
 }
 
 get_target_version() {
     local ver
-    ver="$(curl -fsSL --max-time 30 "${VERSION_URL}" | tr -d '[:space:]')" 
+    ver="$(curl -fsSL --max-time 30 "${VERSION_URL}" | tr -d '[:space:]')"
     if [[ ! "${ver}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-        die "Invalid version format retrieved: '${ver}'" 
+        die "Invalid version format retrieved: '${ver}'"
     fi
     echo "${ver}"
 }
 
-get_installed_version() {
-    if dpkg -l "${ZABBIX_PROXY_PKG}" &>/dev/null; then
+# Get bare version (e.g. "7.4.7") for any installed package
+get_pkg_version() {
+    local pkg="$1"
+    if dpkg -l "${pkg}" &>/dev/null; then
         local raw
-        raw="$(dpkg-query -W -f="${DPKG_VERSION_FMT}" "${ZABBIX_PROXY_PKG}" 2>/dev/null || true)"
+        raw="$(dpkg-query -W -f="${DPKG_VERSION_FMT}" "${pkg}" 2>/dev/null || true)"
         echo "${raw}" | sed -E 's/^[0-9]+://; s/-.*//'
     else
         echo "none"
     fi
+}
+
+# Detect which agent package is installed; returns package name or "none"
+detect_agent_pkg() {
+    if dpkg -l "zabbix-agent2" 2>/dev/null | grep -q "^ii"; then
+        echo "zabbix-agent2"
+    elif dpkg -l "zabbix-agent" 2>/dev/null | grep -q "^ii"; then
+        echo "zabbix-agent"
+    else
+        echo "none"
+    fi
+}
+
+# Get the systemd service name for an agent package
+agent_service_name() {
+    local pkg="$1"
+    case "${pkg}" in
+        zabbix-agent2) echo "zabbix-agent2" ;;
+        zabbix-agent)  echo "zabbix-agent"  ;;
+        *)             echo "" ;;
+    esac
+}
+
+# Install or update a package to the target version
+install_pkg() {
+    local pkg="$1"
+    local target_ver="$2"
+    local APT_OPTS='-y -qq -o Dpkg::Options::=--force-confold -o Dpkg::Options::=--force-confdef'
+
+    log "Installing ${pkg} version ${target_ver}* ..."
+    if ! apt-get install ${APT_OPTS} "${pkg}=${target_ver}*" 2>/dev/null; then
+        log "Retrying install with epoch prefix 1:${target_ver}* ..."
+        apt-get install ${APT_OPTS} "${pkg}=1:${target_ver}*" ||
+            die "Failed to install ${pkg} version ${target_ver}."
+    fi
+
+    local installed
+    installed="$(get_pkg_version "${pkg}")"
+    if [[ "${installed}" != "${target_ver}" ]]; then
+        die "Post-install version mismatch for ${pkg}. Expected ${target_ver}, got ${installed}."
+    fi
+    log "Package ${pkg} verified: ${installed}"
+}
+
+# Restart a service and health-check it
+restart_and_verify() {
+    local svc="$1"
+
+    log "Restarting ${svc} ..."
+    systemctl restart "${svc}" || die "systemctl restart ${svc} failed."
+
+    log "Waiting for ${svc} to become healthy ..."
+    local PID
+    for ((i=1; i<=HEALTH_CHECK_RETRIES; i++)); do
+        sleep "${HEALTH_CHECK_INTERVAL}"
+        if systemctl is-active --quiet "${svc}"; then
+            PID="$(systemctl show -p MainPID --value "${svc}" 2>/dev/null || true)"
+            if [[ -n "${PID}" && "${PID}" -gt 0 ]] && kill -0 "${PID}" 2>/dev/null; then
+                log "Service ${svc} is healthy (PID ${PID})."
+                return 0
+            fi
+        fi
+        log "Health check attempt ${i}/${HEALTH_CHECK_RETRIES} -- ${svc} not yet stable."
+    done
+
+    die "Service ${svc} failed to stabilize after ${HEALTH_CHECK_RETRIES} attempts."
 }
 
 # =============================================================================
@@ -83,7 +153,7 @@ cmd_install() {
     log "Script installed to ${INSTALL_PATH}"
 
     printf '%s\n' \
-        "# Zabbix proxy auto-update -- installed by zabbix-proxy-update.sh v1.2.2" \
+        "# Zabbix proxy/agent auto-update -- installed by zabbix-proxy-update.sh v1.3.0" \
         "SHELL=/bin/bash" \
         "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
         "${CRON_SCHEDULE} root ${INSTALL_PATH} update >> ${LOG_FILE} 2>&1" \
@@ -135,19 +205,41 @@ cmd_status() {
     check_root
     check_dependencies
 
-    local installed target
-    installed="$(get_installed_version)"
+    local proxy_ver target agent_pkg agent_ver agent_svc
+    proxy_ver="$(get_pkg_version "${ZABBIX_PROXY_PKG}")"
     target="$(get_target_version)"
+    agent_pkg="$(detect_agent_pkg)"
+
+    if [[ "${agent_pkg}" != "none" ]]; then
+        agent_ver="$(get_pkg_version "${agent_pkg}")"
+    else
+        agent_ver="not installed"
+    fi
 
     echo ""
-    echo "  Zabbix Proxy Update Status"
+    echo "  Zabbix Update Status"
     echo "  -----------------------------"
-    echo "  Installed version : ${installed}"
     echo "  Target version    : ${target}"
-    if [[ "${installed}" == "${target}" ]]; then
-        echo "  Status            : UP TO DATE"
+    echo ""
+    echo "  Proxy package     : ${ZABBIX_PROXY_PKG}"
+    echo "  Proxy version     : ${proxy_ver}"
+    if [[ "${proxy_ver}" == "${target}" ]]; then
+        echo "  Proxy status      : UP TO DATE"
     else
-        echo "  Status            : UPDATE AVAILABLE"
+        echo "  Proxy status      : UPDATE AVAILABLE"
+    fi
+    echo ""
+    if [[ "${agent_pkg}" != "none" ]]; then
+        echo "  Agent package     : ${agent_pkg}"
+        echo "  Agent version     : ${agent_ver}"
+        if [[ "${agent_ver}" == "${target}" ]]; then
+            echo "  Agent status      : UP TO DATE"
+        else
+            echo "  Agent status      : UPDATE AVAILABLE"
+        fi
+    else
+        echo "  Agent package     : none detected"
+        echo "  Agent status      : WILL INSTALL ${ZABBIX_AGENT_DEFAULT}"
     fi
     echo ""
     if [[ -f "${CRON_FILE}" ]]; then
@@ -170,24 +262,52 @@ cmd_update() {
     UBUNTU_VERSION="$(lsb_release -rs)"
     log "Detected Ubuntu version: ${UBUNTU_VERSION}"
 
+    # -- Fetch target version --------------------------------------------------
     log "Fetching target version from ${VERSION_URL} ..."
     local TARGET_VERSION
     TARGET_VERSION="$(get_target_version)"
     log "Target version: ${TARGET_VERSION}"
 
-    local INSTALLED_VERSION
-    INSTALLED_VERSION="$(get_installed_version)"
-    log "Installed version: ${INSTALLED_VERSION}"
+    local TARGET_MAJOR_MINOR
+    TARGET_MAJOR_MINOR="$(echo "${TARGET_VERSION}" | cut -d. -f1,2)"
 
-    if [[ "${INSTALLED_VERSION}" == "${TARGET_VERSION}" ]]; then
-        log "Already running target version ${TARGET_VERSION}. Nothing to do."
+    # -- Detect current state --------------------------------------------------
+    local PROXY_VERSION
+    PROXY_VERSION="$(get_pkg_version "${ZABBIX_PROXY_PKG}")"
+    log "Proxy (${ZABBIX_PROXY_PKG}) installed version: ${PROXY_VERSION}"
+
+    local AGENT_PKG
+    AGENT_PKG="$(detect_agent_pkg)"
+    local AGENT_VERSION="none"
+    local AGENT_SERVICE=""
+
+    if [[ "${AGENT_PKG}" != "none" ]]; then
+        AGENT_VERSION="$(get_pkg_version "${AGENT_PKG}")"
+        AGENT_SERVICE="$(agent_service_name "${AGENT_PKG}")"
+        log "Agent (${AGENT_PKG}) installed version: ${AGENT_VERSION}"
+    else
+        AGENT_PKG="${ZABBIX_AGENT_DEFAULT}"
+        AGENT_SERVICE="$(agent_service_name "${AGENT_PKG}")"
+        log "No agent detected. Will install ${AGENT_PKG}."
+    fi
+
+    # -- Check if anything needs updating --------------------------------------
+    local PROXY_NEEDS_UPDATE=false
+    local AGENT_NEEDS_UPDATE=false
+
+    if [[ "${PROXY_VERSION}" != "${TARGET_VERSION}" ]]; then
+        PROXY_NEEDS_UPDATE=true
+    fi
+    if [[ "${AGENT_VERSION}" != "${TARGET_VERSION}" ]]; then
+        AGENT_NEEDS_UPDATE=true
+    fi
+
+    if [[ "${PROXY_NEEDS_UPDATE}" == false && "${AGENT_NEEDS_UPDATE}" == false ]]; then
+        log "Proxy and agent are both at target version ${TARGET_VERSION}. Nothing to do."
         exit 0
     fi
 
-    log "Version mismatch: ${INSTALLED_VERSION} -> ${TARGET_VERSION}. Proceeding with update."
-
-    local TARGET_MAJOR_MINOR
-    TARGET_MAJOR_MINOR="$(echo "${TARGET_VERSION}" | cut -d. -f1,2)"
+    # -- Update APT repository if anything needs updating ----------------------
     log "Target repo branch: ${TARGET_MAJOR_MINOR}"
 
     local REPO_DEB_URL="${ZABBIX_REPO_BASE}/${TARGET_MAJOR_MINOR}/release/ubuntu/pool/main/z/zabbix-release/zabbix-release_latest_${TARGET_MAJOR_MINOR}+ubuntu${UBUNTU_VERSION}_all.deb"
@@ -205,42 +325,32 @@ cmd_update() {
     log "Running apt-get update ..."
     apt-get update -qq || die "apt-get update failed."
 
-    log "Installing ${ZABBIX_PROXY_PKG} version ${TARGET_VERSION}* ..."
-    local APT_OPTS='-y -qq -o Dpkg::Options::=--force-confold -o Dpkg::Options::=--force-confdef'
-    if ! apt-get install ${APT_OPTS} "${ZABBIX_PROXY_PKG}=${TARGET_VERSION}*" 2>/dev/null; then
-        log "Retrying install with epoch prefix 1:${TARGET_VERSION}* ..."
-        apt-get install ${APT_OPTS} "${ZABBIX_PROXY_PKG}=1:${TARGET_VERSION}*" ||
-            die "Failed to install ${ZABBIX_PROXY_PKG} version ${TARGET_VERSION}."
+    # -- Update proxy ----------------------------------------------------------
+    if [[ "${PROXY_NEEDS_UPDATE}" == true ]]; then
+        log "Proxy: ${PROXY_VERSION} -> ${TARGET_VERSION}"
+        install_pkg "${ZABBIX_PROXY_PKG}" "${TARGET_VERSION}"
+        restart_and_verify "zabbix-proxy"
+        log "Proxy update complete."
+    else
+        log "Proxy already at ${TARGET_VERSION}. Skipping."
     fi
 
-    local NEW_VERSION
-    NEW_VERSION="$(get_installed_version)"
-
-    if [[ "${NEW_VERSION}" != "${TARGET_VERSION}" ]]; then
-        die "Post-install version mismatch. Expected ${TARGET_VERSION}, got ${NEW_VERSION}."
-    fi
-
-    log "Package version verified: ${NEW_VERSION}"
-
-    log "Restarting ${ZABBIX_SERVICE} ..."
-    systemctl restart "${ZABBIX_SERVICE}" || die "systemctl restart failed."
-
-    log "Waiting for service to become healthy ..."
-    local PID
-    for ((i=1; i<=HEALTH_CHECK_RETRIES; i++)); do
-        sleep "${HEALTH_CHECK_INTERVAL}"
-        if systemctl is-active --quiet "${ZABBIX_SERVICE}"; then
-            PID="$(systemctl show -p MainPID --value "${ZABBIX_SERVICE}" 2>/dev/null || true)"
-            if [[ -n "${PID}" && "${PID}" -gt 0 ]] && kill -0 "${PID}" 2>/dev/null; then
-                log "Service ${ZABBIX_SERVICE} is healthy (PID ${PID})."
-                log "Update complete: ${INSTALLED_VERSION} -> ${TARGET_VERSION}"
-                exit 0
-            fi
+    # -- Update / install agent ------------------------------------------------
+    if [[ "${AGENT_NEEDS_UPDATE}" == true ]]; then
+        if [[ "${AGENT_VERSION}" == "none" ]]; then
+            log "Agent: installing ${AGENT_PKG} ${TARGET_VERSION} (new install)"
+        else
+            log "Agent: ${AGENT_VERSION} -> ${TARGET_VERSION}"
         fi
-        log "Health check attempt ${i}/${HEALTH_CHECK_RETRIES} -- service not yet stable."
-    done
+        install_pkg "${AGENT_PKG}" "${TARGET_VERSION}"
+        systemctl enable "${AGENT_SERVICE}" 2>/dev/null || true
+        restart_and_verify "${AGENT_SERVICE}"
+        log "Agent update complete."
+    else
+        log "Agent already at ${TARGET_VERSION}. Skipping."
+    fi
 
-    die "Service ${ZABBIX_SERVICE} failed to stabilize after ${HEALTH_CHECK_RETRIES} attempts."
+    log "All updates complete."
 }
 
 # =============================================================================
@@ -248,15 +358,15 @@ cmd_update() {
 # =============================================================================
 usage() {
     echo ""
-    echo "  Zabbix Proxy Auto-Update v1.2.2"
-    echo "  --------------------------------"
+    echo "  Zabbix Proxy/Agent Auto-Update v1.3.0"
+    echo "  ----------------------------------------"
     echo "  Usage: sudo $0 <command>"
     echo ""
     echo "  Commands:"
-    echo "    install     Copy script to ${INSTALL_PATH} and create daily cron job"
+    echo "    install     Copy script to ${INSTALL_PATH} and create cron job"
     echo "    uninstall   Remove script and cron job"
-    echo "    update      Check remote version and update proxy if needed"
-    echo "    status      Show installed vs target version"
+    echo "    update      Check remote version and update proxy + agent if needed"
+    echo "    status      Show installed vs target version for proxy and agent"
     echo ""
 }
 
