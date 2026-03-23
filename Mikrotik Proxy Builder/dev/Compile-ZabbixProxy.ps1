@@ -111,7 +111,8 @@ RUN apk add --no-cache \
     libxml2-dev \
     openldap-dev \
     zlib-dev \
-    linux-headers
+    linux-headers \
+    net-snmp-dev
 
 # Install Go 1.24 from official binary (Alpine's Go is too old for agent2)
 RUN case "${TARGETARCH}" in \
@@ -143,7 +144,8 @@ RUN ./configure \
     --with-openssl \
     --with-libcurl \
     --with-libxml2 \
-    --with-ldap
+    --with-ldap \
+    --with-net-snmp
 
 # Build proxy + agent2
 RUN make -j$(nproc)

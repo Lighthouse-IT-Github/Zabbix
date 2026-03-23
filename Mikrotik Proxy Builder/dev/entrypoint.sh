@@ -83,6 +83,7 @@ TrapperTimeout=${ZBX_TRAPPERTIMEOUT:-300}
 UnreachablePeriod=${ZBX_UNREACHABLEPERIOD:-45}
 UnavailableDelay=${ZBX_UNAVAILABLEDELAY:-60}
 UnreachableDelay=${ZBX_UNREACHABLEDELAY:-15}
+FpingLocation=/usr/sbin/fping
 EOF
 
     [ -n "$ZBX_TLSCONNECT" ]     && echo "TLSConnect=${ZBX_TLSCONNECT}"         >> "$PROXY_CONF"

@@ -22,7 +22,8 @@ RUN apk add --no-cache \
     libxml2-dev \
     openldap-dev \
     zlib-dev \
-    linux-headers
+    linux-headers \
+    net-snmp-dev
 
 # Install Go 1.24 from official binary (Alpine's Go is too old for agent2)
 RUN case "${TARGETARCH}" in \
@@ -56,7 +57,8 @@ RUN ./configure \
     --with-openssl \
     --with-libcurl \
     --with-libxml2 \
-    --with-ldap
+    --with-ldap \
+    --with-net-snmp
 
 # Build proxy + agent2
 RUN make -j$(nproc)
@@ -100,7 +102,19 @@ RUN apk add --no-cache \
     procps \
     nano \
     bash \
-    file
+    file \
+    net-snmp \
+    net-snmp-libs \
+    fping
+
+# Ensure fping is available at both /usr/sbin/fping and /usr/bin/fping
+# Also set setuid so the zabbix user can send ICMP pings
+RUN if [ -f /usr/sbin/fping ] && [ ! -f /usr/bin/fping ]; then \
+        ln -s /usr/sbin/fping /usr/bin/fping; \
+    elif [ -f /usr/bin/fping ] && [ ! -f /usr/sbin/fping ]; then \
+        ln -s /usr/bin/fping /usr/sbin/fping; \
+    fi \
+    && chmod 4755 /usr/sbin/fping
 
 # Configure openssh - always running, root login enabled
 RUN mkdir -p /var/run/sshd \
