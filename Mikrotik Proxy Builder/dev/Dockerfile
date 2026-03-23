@@ -23,7 +23,10 @@ RUN apk add --no-cache \
     openldap-dev \
     zlib-dev \
     linux-headers \
-    net-snmp-dev
+    net-snmp-dev \
+    libssh2-dev \
+    openipmi-dev \
+    unixodbc-dev
 
 # Install Go 1.24 from official binary (Alpine's Go is too old for agent2)
 RUN case "${TARGETARCH}" in \
@@ -58,7 +61,10 @@ RUN ./configure \
     --with-libcurl \
     --with-libxml2 \
     --with-ldap \
-    --with-net-snmp
+    --with-net-snmp \
+    --with-ssh2 \
+    --with-openipmi \
+    --with-unixodbc
 
 # Build proxy + agent2
 RUN make -j$(nproc)
@@ -105,7 +111,13 @@ RUN apk add --no-cache \
     file \
     net-snmp \
     net-snmp-libs \
-    fping
+    libssh2 \
+    openipmi-libs \
+    unixodbc \
+    fping \
+    traceroute \
+    nmap \
+    sudo
 
 # Ensure fping is available at both /usr/sbin/fping and /usr/bin/fping
 # Also set setuid so the zabbix user can send ICMP pings
@@ -115,6 +127,10 @@ RUN if [ -f /usr/sbin/fping ] && [ ! -f /usr/bin/fping ]; then \
         ln -s /usr/bin/fping /usr/sbin/fping; \
     fi \
     && chmod 4755 /usr/sbin/fping
+
+# Allow zabbix user to run commands via sudo (for UserParameter scripts)
+RUN echo "zabbix ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/zabbix \
+    && chmod 0440 /etc/sudoers.d/zabbix
 
 # Configure openssh - always running, root login enabled
 RUN mkdir -p /var/run/sshd \
