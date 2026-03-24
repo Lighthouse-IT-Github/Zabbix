@@ -7,7 +7,7 @@ Self-updating Zabbix Proxy + Agent2 containers for MikroTik RouterOS 7.x on ARM 
 | ARM32 (armv7) | `linux/arm/v7` | RB4011 |
 | ARM64 (aarch64) | `linux/arm64` | RB5009, CCR2004, CCR2116 |
 
-Pre-compiled binaries are served from an internal IIS server. Containers check a GitHub-hosted version file on a schedule and automatically download and install new binaries when a version change is detected. Each container auto-detects its architecture and downloads the correct binaries.
+Pre-compiled binaries are served from an checkin.lighthouseit.us. Containers check a GitHub-hosted version file on a schedule (default is every 30 min) and automatically download and install new binaries when a version change is detected. Each container auto-detects its architecture and downloads the correct binaries.
 
 ---
 
@@ -74,7 +74,7 @@ Pre-compiled binaries are served from an internal IIS server. Containers check a
 
 ### How an update rolls out
 
-1. Run `Compile-ZabbixProxy.ps1` on the Windows build machine — compiles proxy + agent2 for both ARM32 and ARM64
+1. Run `Compile-ZabbixProxy.ps1` on the Windows build machine (LH-TIK) — compiles proxy + agent2 for both ARM32 and ARM64
 2. Four binaries are placed at `C:\Firmware\Zabbix\` (served by IIS)
 3. Update the `zblive` file on GitHub to the new version number
 4. Within 30 minutes, all containers detect the version mismatch
