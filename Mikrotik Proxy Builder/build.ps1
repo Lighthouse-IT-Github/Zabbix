@@ -1,7 +1,6 @@
-# Build script for Zabbix Proxy ARM containers v3.2.0
+# Build script for Zabbix Proxy + Agent2 ARM containers v4.0.0
 # Builds BOTH ARM32 (RB4011) and ARM64 (RB5009, CCR2004, CCR2116)
 # Includes OCI normalization via skopeo for RouterOS compatibility
-# For MikroTik RouterOS Container deployment
 # Windows PowerShell version
 
 $ErrorActionPreference = "Stop"
@@ -10,8 +9,8 @@ $IMAGE_BASE = "zabbix-proxy"
 $SKOPEO_IMAGE = "quay.io/skopeo/stable:latest"
 
 Write-Host "=============================================="
-Write-Host "Zabbix Proxy ARM Builder for MikroTik RouterOS"
-Write-Host "v3.2.0 - ARM32 + ARM64 (OCI-compliant)"
+Write-Host "Zabbix Proxy + Agent2 ARM Builder"
+Write-Host "v4.0.0 (OCI-compliant)"
 Write-Host "=============================================="
 Write-Host ""
 Write-Host "Builds containers for:"
@@ -37,7 +36,7 @@ $MAJOR_MINOR = "$($VERSION_PARTS[0]).$($VERSION_PARTS[1])"
 
 Write-Host ""
 Write-Host "=============================================="
-Write-Host "Building Zabbix Proxy $ZABBIX_VERSION"
+Write-Host "Building Zabbix Proxy + Agent2 $ZABBIX_VERSION"
 Write-Host "=============================================="
 
 # Update Dockerfile with requested version
@@ -50,30 +49,21 @@ $dockerfileContent = $dockerfileContent -replace 'ARG ZABBIX_VERSION=.*', "ARG Z
 $dockerfileContent | Set-Content -Path "Dockerfile" -NoNewline
 
 try { docker info | Out-Null } catch {
-    Write-Host "ERROR: Docker is not running" -ForegroundColor Red
-    exit 1
+    Write-Host "ERROR: Docker is not running" -ForegroundColor Red; exit 1
 }
-
 try { docker buildx version | Out-Null } catch {
-    Write-Host "ERROR: Docker buildx is required" -ForegroundColor Red
-    exit 1
+    Write-Host "ERROR: Docker buildx is required" -ForegroundColor Red; exit 1
 }
 
-# -- OCI normalization function -----------------------------------------------
-# RouterOS (especially < 7.21) cannot handle multi-platform or non-standard
-# OCI image tarballs. Running skopeo copy normalizes the archive format.
+# OCI normalization function
 function Normalize-Tar {
     param([string]$TarFile)
-
     $TarDir = Split-Path -Parent (Resolve-Path $TarFile)
     $TarName = Split-Path -Leaf $TarFile
     $RawName = "raw_$TarName"
-
     Write-Host "  Normalizing OCI archive with skopeo..."
     Rename-Item -Path $TarFile -NewName $RawName
-
     docker run --rm -v "${TarDir}:/work" $SKOPEO_IMAGE copy "docker-archive:/work/$RawName" "docker-archive:/work/$TarName"
-
     if ($LASTEXITCODE -ne 0) {
         Write-Host "  WARNING: skopeo normalization failed, using original tar" -ForegroundColor Yellow
         Rename-Item -Path "$TarDir\$RawName" -NewName $TarName
@@ -83,7 +73,6 @@ function Normalize-Tar {
     }
 }
 
-# Pull skopeo image ahead of time
 Write-Host ""
 Write-Host "Pulling skopeo image for OCI normalization..."
 docker pull $SKOPEO_IMAGE
@@ -117,12 +106,10 @@ Write-Host ""
 docker buildx build --platform linux/arm/v7 --tag $ARM32_IMAGE --build-arg "ZABBIX_VERSION=${ZABBIX_VERSION}" --file Dockerfile --load .
 
 if ($LASTEXITCODE -ne 0) {
-    Write-Host "ERROR: ARM32 build failed" -ForegroundColor Red
-    exit 1
+    Write-Host "ERROR: ARM32 build failed" -ForegroundColor Red; exit 1
 }
 
-Write-Host ""
-Write-Host "ARM32 build complete. Exporting..."
+Write-Host ""; Write-Host "ARM32 build complete. Exporting..."
 docker save $ARM32_IMAGE -o $ARM32_TAR
 Normalize-Tar -TarFile $ARM32_TAR
 
@@ -139,12 +126,10 @@ Write-Host ""
 docker buildx build --platform linux/arm64 --tag $ARM64_IMAGE --build-arg "ZABBIX_VERSION=${ZABBIX_VERSION}" --file Dockerfile --load .
 
 if ($LASTEXITCODE -ne 0) {
-    Write-Host "ERROR: ARM64 build failed" -ForegroundColor Red
-    exit 1
+    Write-Host "ERROR: ARM64 build failed" -ForegroundColor Red; exit 1
 }
 
-Write-Host ""
-Write-Host "ARM64 build complete. Exporting..."
+Write-Host ""; Write-Host "ARM64 build complete. Exporting..."
 docker save $ARM64_IMAGE -o $ARM64_TAR
 Normalize-Tar -TarFile $ARM64_TAR
 
@@ -157,14 +142,9 @@ Write-Host "=============================================="
 Write-Host "SUCCESS! Both builds complete." -ForegroundColor Green
 Write-Host "=============================================="
 Write-Host ""
-Write-Host "  ARM32 : $ARM32_TAR ($ARM32_SIZE)"
-Write-Host "          For: RB4011"
+Write-Host "  ARM32 : $ARM32_TAR ($ARM32_SIZE) - RB4011"
+Write-Host "  ARM64 : $ARM64_TAR ($ARM64_SIZE) - RB5009, CCR2004, CCR2116"
 Write-Host ""
-Write-Host "  ARM64 : $ARM64_TAR ($ARM64_SIZE)"
-Write-Host "          For: RB5009, CCR2004, CCR2116"
-Write-Host ""
-Write-Host "Both images are OCI-normalized for RouterOS compatibility."
-Write-Host "Deploy the matching tar to each router."
-Write-Host "SSH is enabled by default (root/zabbix)."
-Write-Host "Auto-updates check every 30 min."
+Write-Host "Both images include Zabbix Proxy + Agent2."
+Write-Host "OCI-normalized for RouterOS compatibility."
 Write-Host ""

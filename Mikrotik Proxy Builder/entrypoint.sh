@@ -1,13 +1,16 @@
 #!/bin/ash
-# Zabbix Proxy Entrypoint v3.1.0
-# sshd always on, auto-update via crond, supervised proxy loop
+# Zabbix Proxy + Agent2 Entrypoint v4.0.0
+# Supervises both processes, sshd always on, auto-update via crond
 set -e
 
 ZABBIX_DB_PATH="${ZBX_DBPATH:-/var/lib/zabbix/zabbix_proxy.db}"
 ZABBIX_SCHEMA="/usr/share/zabbix/database/sqlite3/schema.sql"
-ZABBIX_CONF="/etc/zabbix/zabbix_proxy.conf"
+PROXY_CONF="/etc/zabbix/zabbix_proxy.conf"
+AGENT2_CONF="/etc/zabbix/zabbix_agent2.conf"
 PROXY_BIN="/usr/sbin/zabbix_proxy"
+AGENT2_BIN="/usr/sbin/zabbix_agent2"
 PROXY_PID=0
+AGENT2_PID=0
 
 log() {
     echo "[entrypoint] $(date '+%Y-%m-%d %H:%M:%S') $*"
@@ -16,10 +19,9 @@ log() {
 # Graceful shutdown on container stop
 cleanup() {
     log "Received shutdown signal, stopping..."
-    if [ $PROXY_PID -ne 0 ]; then
-        kill "$PROXY_PID" 2>/dev/null || true
-        wait "$PROXY_PID" 2>/dev/null || true
-    fi
+    [ $PROXY_PID -ne 0 ]  && kill "$PROXY_PID"  2>/dev/null || true
+    [ $AGENT2_PID -ne 0 ] && kill "$AGENT2_PID" 2>/dev/null || true
+    wait 2>/dev/null || true
     exit 0
 }
 trap cleanup TERM INT
@@ -45,14 +47,14 @@ fi
 # -- Start crond for auto-updates ---------------------------------------------
 UPDATE_SCHEDULE="${UPDATE_SCHEDULE:-*/30 * * * *}"
 mkdir -p /var/log
-echo "${UPDATE_SCHEDULE} /usr/local/bin/zabbix-proxy-update.sh update >> /var/log/zabbix-proxy-update.log 2>&1" \
+echo "${UPDATE_SCHEDULE} /usr/local/bin/zabbix-update.sh update >> /var/log/zabbix-update.log 2>&1" \
     | crontab -
 crond -b -l 8
 log "Auto-update cron started (schedule: ${UPDATE_SCHEDULE})"
 
-# -- Generate config from environment variables --------------------------------
+# -- Generate proxy config from environment variables --------------------------
 if [ -n "$ZBX_SERVER_HOST" ]; then
-    cat > "$ZABBIX_CONF" << EOF
+    cat > "$PROXY_CONF" << EOF
 # Zabbix Proxy Configuration - Auto-generated from environment
 ProxyMode=${ZBX_PROXYMODE:-0}
 Server=${ZBX_SERVER_HOST}
@@ -81,31 +83,99 @@ TrapperTimeout=${ZBX_TRAPPERTIMEOUT:-300}
 UnreachablePeriod=${ZBX_UNREACHABLEPERIOD:-45}
 UnavailableDelay=${ZBX_UNAVAILABLEDELAY:-60}
 UnreachableDelay=${ZBX_UNREACHABLEDELAY:-15}
+FpingLocation=/usr/sbin/fping
 EOF
 
-    [ -n "$ZBX_TLSCONNECT" ]     && echo "TLSConnect=${ZBX_TLSCONNECT}"         >> "$ZABBIX_CONF"
-    [ -n "$ZBX_TLSACCEPT" ]      && echo "TLSAccept=${ZBX_TLSACCEPT}"           >> "$ZABBIX_CONF"
-    [ -n "$ZBX_TLSPSKIDENTITY" ] && echo "TLSPSKIdentity=${ZBX_TLSPSKIDENTITY}" >> "$ZABBIX_CONF"
-    [ -n "$ZBX_TLSPSKFILE" ]     && echo "TLSPSKFile=${ZBX_TLSPSKFILE}"         >> "$ZABBIX_CONF"
-    [ -n "$ZBX_TLSCAFILE" ]      && echo "TLSCAFile=${ZBX_TLSCAFILE}"           >> "$ZABBIX_CONF"
-    [ -n "$ZBX_TLSCERTFILE" ]    && echo "TLSCertFile=${ZBX_TLSCERTFILE}"       >> "$ZABBIX_CONF"
-    [ -n "$ZBX_TLSKEYFILE" ]     && echo "TLSKeyFile=${ZBX_TLSKEYFILE}"         >> "$ZABBIX_CONF"
+    [ -n "$ZBX_TLSCONNECT" ]     && echo "TLSConnect=${ZBX_TLSCONNECT}"         >> "$PROXY_CONF"
+    [ -n "$ZBX_TLSACCEPT" ]      && echo "TLSAccept=${ZBX_TLSACCEPT}"           >> "$PROXY_CONF"
+    [ -n "$ZBX_TLSPSKIDENTITY" ] && echo "TLSPSKIdentity=${ZBX_TLSPSKIDENTITY}" >> "$PROXY_CONF"
+    [ -n "$ZBX_TLSPSKFILE" ]     && echo "TLSPSKFile=${ZBX_TLSPSKFILE}"         >> "$PROXY_CONF"
+    [ -n "$ZBX_TLSCAFILE" ]      && echo "TLSCAFile=${ZBX_TLSCAFILE}"           >> "$PROXY_CONF"
+    [ -n "$ZBX_TLSCERTFILE" ]    && echo "TLSCertFile=${ZBX_TLSCERTFILE}"       >> "$PROXY_CONF"
+    [ -n "$ZBX_TLSKEYFILE" ]     && echo "TLSKeyFile=${ZBX_TLSKEYFILE}"         >> "$PROXY_CONF"
 
-    log "Configuration generated from environment variables"
+    log "Proxy configuration generated from environment variables"
 fi
 
-# -- Supervised proxy loop -----------------------------------------------------
-log "Starting zabbix_proxy supervised loop (arch: $(uname -m))..."
+# -- Generate agent2 config from environment variables -------------------------
+# Agent2 reports to the LOCAL proxy (127.0.0.1) by default so it monitors
+# the MikroTik host through the proxy it's colocated with.
+AGENT2_SERVER="${ZBX_AGENT2_SERVER:-127.0.0.1}"
+AGENT2_SERVERACTIVE="${ZBX_AGENT2_SERVERACTIVE:-127.0.0.1}"
+AGENT2_HOSTNAME="${ZBX_AGENT2_HOSTNAME:-${ZBX_HOSTNAME:-$(hostname)}-agent}"
+AGENT2_LISTENPORT="${ZBX_AGENT2_LISTENPORT:-10050}"
 
-while true; do
-    su-exec zabbix "$PROXY_BIN" -c "$ZABBIX_CONF" -f &
+cat > "$AGENT2_CONF" << EOF
+# Zabbix Agent2 Configuration - Auto-generated from environment
+Server=${AGENT2_SERVER}
+ServerActive=${AGENT2_SERVERACTIVE}
+Hostname=${AGENT2_HOSTNAME}
+ListenPort=${AGENT2_LISTENPORT}
+LogType=console
+LogFile=/var/log/zabbix/zabbix_agent2.log
+LogFileSize=0
+DebugLevel=${ZBX_AGENT2_DEBUGLEVEL:-3}
+ControlSocket=/var/run/zabbix/agent2.sock
+EOF
+
+[ -n "$ZBX_AGENT2_TLSCONNECT" ]     && echo "TLSConnect=${ZBX_AGENT2_TLSCONNECT}"         >> "$AGENT2_CONF"
+[ -n "$ZBX_AGENT2_TLSACCEPT" ]      && echo "TLSAccept=${ZBX_AGENT2_TLSACCEPT}"           >> "$AGENT2_CONF"
+[ -n "$ZBX_AGENT2_TLSPSKIDENTITY" ] && echo "TLSPSKIdentity=${ZBX_AGENT2_TLSPSKIDENTITY}" >> "$AGENT2_CONF"
+[ -n "$ZBX_AGENT2_TLSPSKFILE" ]     && echo "TLSPSKFile=${ZBX_AGENT2_TLSPSKFILE}"         >> "$AGENT2_CONF"
+
+log "Agent2 configuration generated (hostname: ${AGENT2_HOSTNAME})"
+
+# -- Determine which services to run -------------------------------------------
+# By default both run. Set DISABLE_AGENT2=true to run proxy only.
+DISABLE_AGENT2_LOWER=$(echo "$DISABLE_AGENT2" | tr '[:upper:]' '[:lower:]')
+RUN_AGENT2=true
+if [ "$DISABLE_AGENT2_LOWER" = "true" ] || [ "$DISABLE_AGENT2" = "1" ]; then
+    RUN_AGENT2=false
+    log "Agent2 disabled via DISABLE_AGENT2 env var"
+fi
+
+# -- Supervised process loop ---------------------------------------------------
+log "Starting supervised process loop (arch: $(uname -m))..."
+
+start_proxy() {
+    su-exec zabbix "$PROXY_BIN" -c "$PROXY_CONF" -f &
     PROXY_PID=$!
     log "zabbix_proxy started (PID ${PROXY_PID})"
+}
 
-    wait "$PROXY_PID" || true
-    EXIT_CODE=$?
-    PROXY_PID=0
+start_agent2() {
+    if [ "$RUN_AGENT2" = "true" ] && [ -x "$AGENT2_BIN" ]; then
+        su-exec zabbix "$AGENT2_BIN" -c "$AGENT2_CONF" -f &
+        AGENT2_PID=$!
+        log "zabbix_agent2 started (PID ${AGENT2_PID})"
+    fi
+}
 
-    log "zabbix_proxy exited (code ${EXIT_CODE}), restarting in 3s..."
+start_proxy
+start_agent2
+
+# Monitor both processes — restart whichever exits
+# Uses polling instead of wait -n (not supported in BusyBox ash)
+while true; do
     sleep 3
+
+    # Check proxy — try to reap zombie first with wait, then check if alive
+    if [ $PROXY_PID -ne 0 ]; then
+        if ! kill -0 "$PROXY_PID" 2>/dev/null; then
+            wait "$PROXY_PID" 2>/dev/null || true
+            log "zabbix_proxy exited, restarting..."
+            PROXY_PID=0
+            start_proxy
+        fi
+    fi
+
+    # Check agent2
+    if [ "$RUN_AGENT2" = "true" ] && [ $AGENT2_PID -ne 0 ]; then
+        if ! kill -0 "$AGENT2_PID" 2>/dev/null; then
+            wait "$AGENT2_PID" 2>/dev/null || true
+            log "zabbix_agent2 exited, restarting..."
+            AGENT2_PID=0
+            start_agent2
+        fi
+    fi
 done

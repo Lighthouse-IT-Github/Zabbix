@@ -1,18 +1,15 @@
 # =============================================================================
-# Compile-ZabbixProxy.ps1 v1.1.0
+# Compile-ZabbixProxy.ps1 v2.0.0
 # =============================================================================
-# Cross-compiles Zabbix Proxy for BOTH ARM32 and ARM64 and places the
-# binaries at C:\Firmware\Zabbix\ for IIS to serve.
+# Cross-compiles Zabbix Proxy + Agent2 for BOTH ARM32 and ARM64.
 #
-# Output files:
-#   C:\Firmware\Zabbix\zabbix_proxy.bin       (ARM32 - RB4011)
-#   C:\Firmware\Zabbix\zabbix_proxy_arm64.bin (ARM64 - RB5009, CCR2004, CCR2116)
+# Output files (C:\Firmware\Zabbix\):
+#   zabbix_proxy.bin        (ARM32 - RB4011)
+#   zabbix_proxy_arm64.bin  (ARM64 - RB5009, CCR2004, CCR2116)
+#   zabbix_agent2.bin       (ARM32 - RB4011)
+#   zabbix_agent2_arm64.bin (ARM64 - RB5009, CCR2004, CCR2116)
 #
 # Prerequisites: Docker Desktop with buildx support
-#
-# Usage:
-#   Right-click -> Run with PowerShell
-#   or: powershell -ExecutionPolicy Bypass -File .\Compile-ZabbixProxy.ps1
 # =============================================================================
 
 $ErrorActionPreference = "Stop"
@@ -21,16 +18,15 @@ $OUTPUT_DIR = "C:\Firmware\Zabbix"
 $TEMP_DIR = "$env:TEMP\zabbix-arm-compile"
 $BUILDER_NAME = "arm-builder"
 
-# -- Banner -------------------------------------------------------------------
 Write-Host ""
 Write-Host "=============================================="
-Write-Host "Zabbix Proxy ARM Compiler"
-Write-Host "v1.1.0 - ARM32 + ARM64"
+Write-Host "Zabbix Proxy + Agent2 ARM Compiler"
+Write-Host "v2.0.0 - ARM32 + ARM64"
 Write-Host "=============================================="
 Write-Host ""
-Write-Host "This script compiles the Zabbix Proxy binary for:"
-Write-Host "  ARM32 (armv7)   -> zabbix_proxy.bin"
-Write-Host "  ARM64 (aarch64) -> zabbix_proxy_arm64.bin"
+Write-Host "Compiles for both architectures:"
+Write-Host "  ARM32 (armv7)   -> zabbix_proxy.bin, zabbix_agent2.bin"
+Write-Host "  ARM64 (aarch64) -> zabbix_proxy_arm64.bin, zabbix_agent2_arm64.bin"
 Write-Host ""
 Write-Host "Output directory: $OUTPUT_DIR"
 Write-Host ""
@@ -55,20 +51,18 @@ $MAJOR_MINOR = "$($VERSION_PARTS[0]).$($VERSION_PARTS[1])"
 
 Write-Host ""
 Write-Host "=============================================="
-Write-Host "Compiling Zabbix Proxy $ZABBIX_VERSION (ARM32 + ARM64)"
+Write-Host "Compiling Zabbix $ZABBIX_VERSION (Proxy + Agent2, ARM32 + ARM64)"
 Write-Host "=============================================="
 
 # -- Check Docker -------------------------------------------------------------
 Write-Host ""
 Write-Host "Checking Docker..."
-
 try { docker info | Out-Null } catch {
-    Write-Host "ERROR: Docker is not running. Please start Docker Desktop." -ForegroundColor Red
+    Write-Host "ERROR: Docker is not running." -ForegroundColor Red
     exit 1
 }
-
 try { docker buildx version | Out-Null } catch {
-    Write-Host "ERROR: Docker buildx is required. Update Docker Desktop." -ForegroundColor Red
+    Write-Host "ERROR: Docker buildx is required." -ForegroundColor Red
     exit 1
 }
 
@@ -97,11 +91,13 @@ if (Test-Path $TEMP_DIR) {
 }
 New-Item -ItemType Directory -Path $TEMP_DIR -Force | Out-Null
 
-# Create a Dockerfile template using single-quoted here-string (no PS expansion)
-# then replace placeholders with actual values
+# Dockerfile template (single-quoted here-string = no PS expansion)
 $CompileDockerfile = @'
 FROM alpine:3.19 AS builder
 
+ARG TARGETARCH
+
+# Install C build dependencies
 RUN apk add --no-cache \
     alpine-sdk \
     autoconf \
@@ -115,7 +111,24 @@ RUN apk add --no-cache \
     libxml2-dev \
     openldap-dev \
     zlib-dev \
-    linux-headers
+    linux-headers \
+    net-snmp-dev \
+    libssh2-dev \
+    openipmi-dev \
+    unixodbc-dev
+
+# Install Go 1.24 from official binary (Alpine's Go is too old for agent2)
+RUN case "${TARGETARCH}" in \
+        arm64)  GOARCH="arm64" ;; \
+        arm*)   GOARCH="armv6l" ;; \
+        *)      GOARCH="${TARGETARCH}" ;; \
+    esac \
+    && curl -fsSL "https://go.dev/dl/go1.24.1.linux-${GOARCH}.tar.gz" -o /tmp/go.tar.gz \
+    && tar -C /usr/local -xzf /tmp/go.tar.gz \
+    && rm /tmp/go.tar.gz
+
+ENV PATH="/usr/local/go/bin:${PATH}"
+ENV GOPATH="/root/go"
 
 WORKDIR /build
 
@@ -128,20 +141,29 @@ RUN ./configure \
     --prefix=/usr \
     --sysconfdir=/etc/zabbix \
     --enable-proxy \
+    --enable-agent2 \
     --with-sqlite3 \
     --with-libpcre2 \
     --with-openssl \
     --with-libcurl \
     --with-libxml2 \
-    --with-ldap
+    --with-ldap \
+    --with-net-snmp \
+    --with-ssh2 \
+    --with-openipmi \
+    --with-unixodbc
 
+# Build proxy + agent2
 RUN make -j$(nproc)
-
 RUN strip src/zabbix_proxy/zabbix_proxy
 
-# Final stage: just the binary in a scratch image for extraction
+# Strip agent2 if possible (Go binaries may not always strip cleanly)
+RUN strip src/go/bin/zabbix_agent2 || true
+
+# Final stage: extract both binaries
 FROM scratch
 COPY --from=builder /build/zabbix-__VERSION__/src/zabbix_proxy/zabbix_proxy /zabbix_proxy
+COPY --from=builder /build/zabbix-__VERSION__/src/go/bin/zabbix_agent2 /zabbix_agent2
 '@
 
 $CompileDockerfile = $CompileDockerfile -replace '__VERSION__', $ZABBIX_VERSION
@@ -162,7 +184,7 @@ Write-Host ""
 Write-Host "----------------------------------------------"
 Write-Host "[1/2] Compiling ARM32 (armv7) - RB4011" -ForegroundColor Cyan
 Write-Host "----------------------------------------------"
-Write-Host "This may take 10-15 minutes..."
+Write-Host "This may take 15-25 minutes (proxy + agent2)..."
 Write-Host ""
 
 $ARM32_Dir = "$TEMP_DIR\arm32"
@@ -179,14 +201,20 @@ if ($LASTEXITCODE -ne 0) {
     exit 1
 }
 
-$ARM32_Binary = "$ARM32_Dir\zabbix_proxy"
-if (-not (Test-Path $ARM32_Binary)) {
-    Write-Host "ERROR: ARM32 binary not found at $ARM32_Binary" -ForegroundColor Red
+if (-not (Test-Path "$ARM32_Dir\zabbix_proxy")) {
+    Write-Host "ERROR: ARM32 proxy binary not found" -ForegroundColor Red
+    exit 1
+}
+if (-not (Test-Path "$ARM32_Dir\zabbix_agent2")) {
+    Write-Host "ERROR: ARM32 agent2 binary not found" -ForegroundColor Red
     exit 1
 }
 
-$ARM32_Size = "{0:N2} MB" -f ((Get-Item $ARM32_Binary).Length / 1MB)
-Write-Host "ARM32 compilation successful ($ARM32_Size)" -ForegroundColor Green
+$ARM32_ProxySize = "{0:N2} MB" -f ((Get-Item "$ARM32_Dir\zabbix_proxy").Length / 1MB)
+$ARM32_Agent2Size = "{0:N2} MB" -f ((Get-Item "$ARM32_Dir\zabbix_agent2").Length / 1MB)
+Write-Host "ARM32 compilation successful" -ForegroundColor Green
+Write-Host "  Proxy:  $ARM32_ProxySize"
+Write-Host "  Agent2: $ARM32_Agent2Size"
 
 # =============================================================================
 # Build ARM64
@@ -195,7 +223,7 @@ Write-Host ""
 Write-Host "----------------------------------------------"
 Write-Host "[2/2] Compiling ARM64 (aarch64) - RB5009, CCR" -ForegroundColor Cyan
 Write-Host "----------------------------------------------"
-Write-Host "This may take 10-15 minutes..."
+Write-Host "This may take 15-25 minutes (proxy + agent2)..."
 Write-Host ""
 
 $ARM64_Dir = "$TEMP_DIR\arm64"
@@ -212,14 +240,20 @@ if ($LASTEXITCODE -ne 0) {
     exit 1
 }
 
-$ARM64_Binary = "$ARM64_Dir\zabbix_proxy"
-if (-not (Test-Path $ARM64_Binary)) {
-    Write-Host "ERROR: ARM64 binary not found at $ARM64_Binary" -ForegroundColor Red
+if (-not (Test-Path "$ARM64_Dir\zabbix_proxy")) {
+    Write-Host "ERROR: ARM64 proxy binary not found" -ForegroundColor Red
+    exit 1
+}
+if (-not (Test-Path "$ARM64_Dir\zabbix_agent2")) {
+    Write-Host "ERROR: ARM64 agent2 binary not found" -ForegroundColor Red
     exit 1
 }
 
-$ARM64_Size = "{0:N2} MB" -f ((Get-Item $ARM64_Binary).Length / 1MB)
-Write-Host "ARM64 compilation successful ($ARM64_Size)" -ForegroundColor Green
+$ARM64_ProxySize = "{0:N2} MB" -f ((Get-Item "$ARM64_Dir\zabbix_proxy").Length / 1MB)
+$ARM64_Agent2Size = "{0:N2} MB" -f ((Get-Item "$ARM64_Dir\zabbix_agent2").Length / 1MB)
+Write-Host "ARM64 compilation successful" -ForegroundColor Green
+Write-Host "  Proxy:  $ARM64_ProxySize"
+Write-Host "  Agent2: $ARM64_Agent2Size"
 
 # =============================================================================
 # Deploy to IIS directory
@@ -227,46 +261,51 @@ Write-Host "ARM64 compilation successful ($ARM64_Size)" -ForegroundColor Green
 Write-Host ""
 Write-Host "Deploying to $OUTPUT_DIR..."
 
-# -- ARM32: zabbix_proxy.bin --
-$ARM32_Dest = "$OUTPUT_DIR\zabbix_proxy.bin"
-if (Test-Path $ARM32_Dest) {
-    $BackupName = "zabbix_proxy_$(Get-Date -Format 'yyyyMMdd_HHmmss').bak"
-    Copy-Item $ARM32_Dest "$OUTPUT_DIR\$BackupName"
-    Write-Host "  Backed up ARM32 binary to $BackupName"
+function Deploy-Binary {
+    param([string]$Source, [string]$DestName)
+    $DestPath = "$OUTPUT_DIR\$DestName"
+    if (Test-Path $DestPath) {
+        $BakName = "$($DestName -replace '\.bin$','')_$(Get-Date -Format 'yyyyMMdd_HHmmss').bak"
+        Copy-Item $DestPath "$OUTPUT_DIR\$BakName"
+        Write-Host "  Backed up $DestName to $BakName"
+    }
+    Copy-Item -Force $Source $DestPath
+    Write-Host "  Deployed $DestName"
 }
-Copy-Item -Force $ARM32_Binary $ARM32_Dest
 
-# -- ARM64: zabbix_proxy_arm64.bin --
-$ARM64_Dest = "$OUTPUT_DIR\zabbix_proxy_arm64.bin"
-if (Test-Path $ARM64_Dest) {
-    $BackupName = "zabbix_proxy_arm64_$(Get-Date -Format 'yyyyMMdd_HHmmss').bak"
-    Copy-Item $ARM64_Dest "$OUTPUT_DIR\$BackupName"
-    Write-Host "  Backed up ARM64 binary to $BackupName"
-}
-Copy-Item -Force $ARM64_Binary $ARM64_Dest
+# ARM32
+Deploy-Binary -Source "$ARM32_Dir\zabbix_proxy" -DestName "zabbix_proxy.bin"
+Deploy-Binary -Source "$ARM32_Dir\zabbix_agent2" -DestName "zabbix_agent2.bin"
 
-# -- Version marker --
+# ARM64
+Deploy-Binary -Source "$ARM64_Dir\zabbix_proxy" -DestName "zabbix_proxy_arm64.bin"
+Deploy-Binary -Source "$ARM64_Dir\zabbix_agent2" -DestName "zabbix_agent2_arm64.bin"
+
+# Version marker
 "$ZABBIX_VERSION" | Set-Content -Path "$OUTPUT_DIR\version.txt" -NoNewline
 
 # -- Cleanup -------------------------------------------------------------------
+Write-Host ""
 Write-Host "Cleaning up temp files..."
 Remove-Item -Recurse -Force $TEMP_DIR -ErrorAction SilentlyContinue
 
 # -- Done ----------------------------------------------------------------------
 Write-Host ""
 Write-Host "=============================================="
-Write-Host "SUCCESS! Both binaries compiled." -ForegroundColor Green
+Write-Host "SUCCESS! All binaries compiled." -ForegroundColor Green
 Write-Host "=============================================="
 Write-Host ""
-Write-Host "  ARM32 : $ARM32_Dest ($ARM32_Size)"
-Write-Host "           -> http://checkin.lighthouseit.us/Zabbix/zabbix_proxy.bin"
-Write-Host "           For: RB4011"
+Write-Host "  ARM32 (RB4011):"
+Write-Host "    Proxy  : $OUTPUT_DIR\zabbix_proxy.bin ($ARM32_ProxySize)"
+Write-Host "    Agent2 : $OUTPUT_DIR\zabbix_agent2.bin ($ARM32_Agent2Size)"
 Write-Host ""
-Write-Host "  ARM64 : $ARM64_Dest ($ARM64_Size)"
-Write-Host "           -> http://checkin.lighthouseit.us/Zabbix/zabbix_proxy_arm64.bin"
-Write-Host "           For: RB5009, CCR2004, CCR2116"
+Write-Host "  ARM64 (RB5009, CCR2004, CCR2116):"
+Write-Host "    Proxy  : $OUTPUT_DIR\zabbix_proxy_arm64.bin ($ARM64_ProxySize)"
+Write-Host "    Agent2 : $OUTPUT_DIR\zabbix_agent2_arm64.bin ($ARM64_Agent2Size)"
 Write-Host ""
 Write-Host "  Version: $ZABBIX_VERSION"
+Write-Host ""
+Write-Host "  IIS serves from: http://checkin.lighthouseit.us/Zabbix/"
 Write-Host ""
 Write-Host "  Update the GitHub zblive file to '$ZABBIX_VERSION'"
 Write-Host "  to trigger the rollout to all containers."

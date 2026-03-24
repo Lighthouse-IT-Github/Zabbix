@@ -1,9 +1,7 @@
 #!/bin/bash
-# Build script for Zabbix Proxy ARM containers v3.2.0
+# Build script for Zabbix Proxy + Agent2 ARM containers v4.0.0
 # Builds BOTH ARM32 (RB4011) and ARM64 (RB5009, CCR2004, CCR2116)
 # Includes OCI normalization via skopeo for RouterOS compatibility
-# For MikroTik RouterOS Container deployment
-# Works on: Linux, macOS (Intel & Apple Silicon)
 
 set -e
 
@@ -11,8 +9,8 @@ IMAGE_BASE="zabbix-proxy"
 SKOPEO_IMAGE="quay.io/skopeo/stable:latest"
 
 echo "=============================================="
-echo "Zabbix Proxy ARM Builder for MikroTik RouterOS"
-echo "v3.2.0 - ARM32 + ARM64 (OCI-compliant)"
+echo "Zabbix Proxy + Agent2 ARM Builder"
+echo "v4.0.0 (OCI-compliant)"
 echo "=============================================="
 echo ""
 echo "Builds containers for:"
@@ -33,7 +31,7 @@ MAJOR_MINOR=$(echo "$ZABBIX_VERSION" | cut -d. -f1,2)
 
 echo ""
 echo "=============================================="
-echo "Building Zabbix Proxy $ZABBIX_VERSION"
+echo "Building Zabbix Proxy + Agent2 $ZABBIX_VERSION"
 echo "=============================================="
 
 # Update Dockerfile with requested version
@@ -47,20 +45,10 @@ rm -f Dockerfile.bak
 OS="$(uname -s)"
 echo "Detected OS: $OS"
 
-if ! docker info &> /dev/null; then
-    echo "ERROR: Docker is not running"
-    exit 1
-fi
+if ! docker info &> /dev/null; then echo "ERROR: Docker is not running"; exit 1; fi
+if ! docker buildx version &> /dev/null; then echo "ERROR: Docker buildx is required"; exit 1; fi
 
-if ! docker buildx version &> /dev/null; then
-    echo "ERROR: Docker buildx is required"
-    exit 1
-fi
-
-# -- OCI normalization via skopeo ---------------------------------------------
-# RouterOS (especially < 7.21) cannot handle multi-platform or non-standard
-# OCI image tarballs. Running skopeo copy normalizes the archive format.
-# See: https://tangentsoft.com/mikrotik/wiki?name=Container+Limitations
+# OCI normalization
 normalize_tar() {
     local TAR_FILE="$1"
     local TAR_DIR
@@ -88,10 +76,9 @@ normalize_tar() {
     fi
 }
 
-# Pull skopeo image ahead of time
 echo ""
 echo "Pulling skopeo image for OCI normalization..."
-docker pull "$SKOPEO_IMAGE" || echo "WARNING: Could not pull skopeo image. Will try at normalization step."
+docker pull "$SKOPEO_IMAGE" || echo "WARNING: Could not pull skopeo image."
 
 BUILDER_NAME="arm-builder"
 if ! docker buildx inspect "$BUILDER_NAME" &> /dev/null 2>&1; then
@@ -121,13 +108,9 @@ docker buildx build \
     --load \
     .
 
-if [ $? -ne 0 ]; then
-    echo "ERROR: ARM32 build failed"
-    exit 1
-fi
+if [ $? -ne 0 ]; then echo "ERROR: ARM32 build failed"; exit 1; fi
 
-echo ""
-echo "ARM32 build complete. Exporting..."
+echo ""; echo "ARM32 build complete. Exporting..."
 docker save "${ARM32_IMAGE}" -o "$ARM32_TAR"
 normalize_tar "$ARM32_TAR"
 
@@ -149,13 +132,9 @@ docker buildx build \
     --load \
     .
 
-if [ $? -ne 0 ]; then
-    echo "ERROR: ARM64 build failed"
-    exit 1
-fi
+if [ $? -ne 0 ]; then echo "ERROR: ARM64 build failed"; exit 1; fi
 
-echo ""
-echo "ARM64 build complete. Exporting..."
+echo ""; echo "ARM64 build complete. Exporting..."
 docker save "${ARM64_IMAGE}" -o "$ARM64_TAR"
 normalize_tar "$ARM64_TAR"
 
@@ -173,13 +152,9 @@ echo "=============================================="
 echo "SUCCESS! Both builds complete."
 echo "=============================================="
 echo ""
-echo "  ARM32 : $ARM32_TAR ($(get_size "$ARM32_TAR"))"
-echo "          For: RB4011"
+echo "  ARM32 : $ARM32_TAR ($(get_size "$ARM32_TAR")) - RB4011"
+echo "  ARM64 : $ARM64_TAR ($(get_size "$ARM64_TAR")) - RB5009, CCR2004, CCR2116"
 echo ""
-echo "  ARM64 : $ARM64_TAR ($(get_size "$ARM64_TAR"))"
-echo "          For: RB5009, CCR2004, CCR2116"
-echo ""
-echo "Deploy the matching tar to each router."
-echo "SSH is enabled by default (root/zabbix)."
-echo "Auto-updates check every 30 min."
+echo "Both images include Zabbix Proxy + Agent2."
+echo "OCI-normalized for RouterOS compatibility."
 echo ""
