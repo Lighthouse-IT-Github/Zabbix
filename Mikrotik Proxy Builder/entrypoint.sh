@@ -1,5 +1,5 @@
 #!/bin/ash
-# Zabbix Proxy + Agent2 Entrypoint v4.0.0
+# Zabbix Proxy + Agent2 Entrypoint v4.0.1
 # Supervises both processes, sshd always on, auto-update via crond
 set -e
 
@@ -26,13 +26,22 @@ cleanup() {
 }
 trap cleanup TERM INT
 
-# -- Initialize SQLite database -----------------------------------------------
-if [ ! -f "$ZABBIX_DB_PATH" ]; then
-    log "Initializing Zabbix proxy SQLite database..."
-    /usr/bin/sqlite3 "$ZABBIX_DB_PATH" < "$ZABBIX_SCHEMA"
-    chown zabbix:zabbix "$ZABBIX_DB_PATH"
-    log "Database initialized at $ZABBIX_DB_PATH"
-fi
+# -- Database initialization function ------------------------------------------
+# Called before every proxy start so DB is always present, even after updates
+# that delete it (downgrades). For upgrades, the DB exists and the proxy
+# handles schema migration itself.
+ensure_db() {
+    if [ ! -f "$ZABBIX_DB_PATH" ]; then
+        log "Database not found. Initializing from schema.sql..."
+        if [ -f "$ZABBIX_SCHEMA" ]; then
+            /usr/bin/sqlite3 "$ZABBIX_DB_PATH" < "$ZABBIX_SCHEMA"
+            chown zabbix:zabbix "$ZABBIX_DB_PATH"
+            log "Database initialized at $ZABBIX_DB_PATH"
+        else
+            log "WARNING: schema.sql not found at $ZABBIX_SCHEMA. Proxy may fail to start."
+        fi
+    fi
+}
 
 # -- Start SSH daemon (always on) ---------------------------------------------
 ROOT_PASS="${SSH_ROOT_PASSWORD:-zabbix}"
@@ -138,6 +147,7 @@ fi
 log "Starting supervised process loop (arch: $(uname -m))..."
 
 start_proxy() {
+    ensure_db
     su-exec zabbix "$PROXY_BIN" -c "$PROXY_CONF" -f &
     PROXY_PID=$!
     log "zabbix_proxy started (PID ${PROXY_PID})"

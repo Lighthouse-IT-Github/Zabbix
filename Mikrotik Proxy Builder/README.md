@@ -341,16 +341,19 @@ The update script supports both upgrades and downgrades. When you change the ver
 
 Binaries are replaced and both processes restart. The SQLite database is preserved since the schema is unchanged within a major.minor branch.
 
-### Major.minor changes (e.g. 7.2.x → 7.4.x or 7.4.x → 7.2.x)
+### Major.minor upgrades (e.g. 7.2.x → 7.4.x)
 
-The update script detects the major.minor change and automatically:
+The update script detects the upgrade and **preserves the database**. The new proxy binary auto-migrates the schema on startup. No data is lost.
+
+### Major.minor downgrades (e.g. 7.4.x → 7.2.x)
+
+The update script detects the downgrade and automatically:
 
 1. Backs up the existing database (e.g. `zabbix_proxy.db.7.4.7.bak`)
 2. Deletes the database
-3. Reinitializes a fresh database from `schema.sql`
-4. Restarts both processes
+3. The supervisor loop reinitializes a fresh database from `schema.sql` before starting the proxy
 
-Any buffered monitoring data that hasn't been sent to the Zabbix server will be lost during a major.minor change. For major.minor version changes, consider rebuilding the container image with `build.ps1` / `build.sh` to ensure `schema.sql` matches the new version.
+Buffered monitoring data that hasn't been sent to the Zabbix server will be lost during a downgrade. For major.minor downgrades, consider rebuilding the container image with `build.ps1` / `build.sh` to ensure `schema.sql` matches the target version.
 
 ---
 
@@ -384,7 +387,8 @@ Any buffered monitoring data that hasn't been sent to the Zabbix server will be 
 
 | Version | Changes |
 |---|---|
-| **v4.0.0** | Added Zabbix Agent2 alongside proxy. Added SSH checks, IPMI, ODBC compile support. Added fping (dual-path symlink + setuid), traceroute, nmap, sudo. Go 1.24 direct install for agent2 compilation. Fixed BusyBox ash `wait -n` supervisor bug. |
+| **v4.0.1** | Fixed major.minor update bug: upgrades now preserve DB (proxy auto-migrates schema), downgrades wipe and reinit. Moved DB init into supervisor loop so it runs before every proxy start. |
+| v4.0.0 | Added Zabbix Agent2 alongside proxy. Added SSH checks, IPMI, ODBC compile support. Added fping (dual-path symlink + setuid), traceroute, nmap, sudo. Go 1.24 direct install for agent2 compilation. Fixed BusyBox ash `wait -n` supervisor bug. |
 | v3.2.0 | OCI normalization via skopeo. Database wipe on major.minor version changes. |
 | v3.1.0 | ARM64 support (RB5009, CCR2004, CCR2116). Dual-arch build scripts. |
 | v3.0.0 | Two-part architecture: lean container + Windows compile script. Auto-update from IIS. |

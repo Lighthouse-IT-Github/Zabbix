@@ -6,7 +6,7 @@
 FROM alpine:3.19 AS builder
 
 ARG TARGETARCH
-ENV ZABBIX_VERSION=7.2.3
+ENV ZABBIX_VERSION=7.4.8
 
 # Install C build dependencies
 RUN apk add --no-cache \
@@ -44,7 +44,7 @@ ENV GOPATH="/root/go"
 WORKDIR /build
 
 # Download and extract Zabbix source
-RUN curl -LO https://cdn.zabbix.com/zabbix/sources/stable/7.2/zabbix-${ZABBIX_VERSION}.tar.gz \
+RUN curl -LO https://cdn.zabbix.com/zabbix/sources/stable/7.4/zabbix-${ZABBIX_VERSION}.tar.gz \
     && tar xzf zabbix-${ZABBIX_VERSION}.tar.gz
 
 WORKDIR /build/zabbix-${ZABBIX_VERSION}
@@ -86,7 +86,7 @@ FROM alpine:3.19
 
 LABEL maintainer="Lighthouse IT"
 LABEL description="Zabbix Proxy + Agent2 for MikroTik RouterOS (ARM)"
-LABEL version="7.2.3"
+LABEL version="7.4.8"
 
 # Runtime dependencies + openssh + tools
 RUN apk add --no-cache \
@@ -159,7 +159,7 @@ COPY zabbix-update.sh /usr/local/bin/zabbix-update.sh
 RUN chmod +x /entrypoint.sh /usr/local/bin/zabbix-update.sh
 
 # Write initial version tracker
-ARG ZABBIX_VERSION=7.2.3
+ARG ZABBIX_VERSION=7.4.8
 RUN echo "${ZABBIX_VERSION}" > /etc/zabbix/.installed_version
 
 # Persistent data volume

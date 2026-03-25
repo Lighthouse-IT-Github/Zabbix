@@ -1,6 +1,6 @@
 #!/bin/ash
 # =============================================================================
-# zabbix-update.sh v4.0.0 (Alpine Container Edition)
+# zabbix-update.sh v4.0.1 (Alpine Container Edition)
 # =============================================================================
 # Checks GitHub version file, downloads pre-compiled proxy + agent2 binaries
 # from IIS server. Auto-detects ARM32 vs ARM64.
@@ -211,20 +211,26 @@ cmd_update() {
 
     if [ "${INSTALLED_MAJOR_MINOR}" != "${TARGET_MAJOR_MINOR}" ]; then
         log "Major.minor version change detected (${INSTALLED_MAJOR_MINOR} -> ${TARGET_MAJOR_MINOR})."
-        if [ -f "${ZABBIX_DB_PATH}" ]; then
-            local DB_BACKUP="${ZABBIX_DB_PATH}.${INSTALLED_VERSION}.bak"
-            cp -f "${ZABBIX_DB_PATH}" "${DB_BACKUP}"
-            log "Backed up database to ${DB_BACKUP}"
-            rm -f "${ZABBIX_DB_PATH}"
-            log "Removed old database (schema incompatible across major.minor versions)."
-        fi
-        # Reinitialize database with current schema
-        if [ -f "${ZABBIX_SCHEMA}" ]; then
-            /usr/bin/sqlite3 "${ZABBIX_DB_PATH}" < "${ZABBIX_SCHEMA}"
-            chown zabbix:zabbix "${ZABBIX_DB_PATH}"
-            log "Reinitialized database from schema.sql"
+
+        # Compare major.minor to determine upgrade vs downgrade
+        # Upgrades: let the new binary auto-migrate the schema
+        # Downgrades: must delete DB because older binary can't read newer schema
+        local INSTALLED_SORT TARGET_SORT
+        INSTALLED_SORT=$(printf '%03d%03d' $(echo "${INSTALLED_MAJOR_MINOR}" | tr '.' ' '))
+        TARGET_SORT=$(printf '%03d%03d' $(echo "${TARGET_MAJOR_MINOR}" | tr '.' ' '))
+
+        if [ "$TARGET_SORT" -lt "$INSTALLED_SORT" ]; then
+            log "DOWNGRADE detected (${INSTALLED_MAJOR_MINOR} -> ${TARGET_MAJOR_MINOR})."
+            if [ -f "${ZABBIX_DB_PATH}" ]; then
+                local DB_BACKUP="${ZABBIX_DB_PATH}.${INSTALLED_VERSION}.bak"
+                cp -f "${ZABBIX_DB_PATH}" "${DB_BACKUP}"
+                log "Backed up database to ${DB_BACKUP}"
+                rm -f "${ZABBIX_DB_PATH}"
+                log "Removed database. Supervisor will reinitialize from schema.sql."
+            fi
         else
-            log "Warning: schema.sql not found. New binary will need to create the DB."
+            log "UPGRADE detected (${INSTALLED_MAJOR_MINOR} -> ${TARGET_MAJOR_MINOR})."
+            log "Database preserved. New binary will auto-migrate the schema on startup."
         fi
     else
         log "Patch-level change only (${INSTALLED_MAJOR_MINOR}). Database schema unchanged."
@@ -280,7 +286,7 @@ usage() {
     arch_suffix="$(get_arch_suffix)"
 
     echo ""
-    echo "  Zabbix Auto-Update v4.0.0 (Alpine Container)"
+    echo "  Zabbix Auto-Update v4.0.1 (Alpine Container)"
     echo "  -------------------------------------------------"
     echo "  Usage: $0 <command>"
     echo ""
